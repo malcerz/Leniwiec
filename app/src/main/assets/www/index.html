@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Leniwiec - Rowerowa Nawigacja Płaska</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- UI Overlay -->
+    <div class="app-container">
+        <!-- Top Search Panel -->
+        <header class="glass-panel search-panel">
+            <div class="logo">
+                <i data-lucide="navigation" class="logo-icon"></i>
+                <span class="logo-text">Leniwiec</span>
+            </div>
+
+            <div class="mode-tabs">
+                <button id="mode-ab-btn" class="tab-btn active"><i data-lucide="navigation-2" style="width:12px; height:12px; display:inline-block; margin-right:4px;"></i>Trasa A-B</button>
+                <button id="mode-loop-btn" class="tab-btn"><i data-lucide="rotate-ccw" style="width:12px; height:12px; display:inline-block; margin-right:4px;"></i>Pętla</button>
+            </div>
+            
+            <div class="input-group">
+                <div class="input-row">
+                    <i data-lucide="circle-dot" class="input-icon start-icon"></i>
+                    <input type="text" id="start-input" placeholder="Wpisz punkt startowy A..." autocomplete="off">
+                    <button id="use-gps-btn" class="icon-btn" title="Użyj mojej lokalizacji">
+                        <i data-lucide="locate"></i>
+                    </button>
+                    <div id="start-suggestions" class="suggestions-list hidden"></div>
+                </div>
+                <div class="input-divider mode-ab-only"></div>
+                <div class="input-row mode-ab-only" id="end-row">
+                    <i data-lucide="map-pin" class="input-icon end-icon"></i>
+                    <input type="text" id="end-input" placeholder="Wpisz cel podróży B..." autocomplete="off">
+                    <div id="end-suggestions" class="suggestions-list hidden"></div>
+                </div>
+                <div class="input-row mode-loop-only hidden" id="loop-row">
+                    <i data-lucide="milestone" class="input-icon loop-icon" style="color: var(--accent-emerald-light);"></i>
+                    <span style="font-size: 14px; font-weight: 500; margin-right: 12px; color: var(--text-secondary);">Dystans pętli:</span>
+                    <input type="number" id="loop-distance-input" value="10" min="5" max="100" style="max-width: 70px; text-align: center; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px; color: white; outline: none;">
+                    <span style="font-size: 14px; font-weight: 500; margin-left: 8px; color: var(--text-secondary);">km</span>
+                </div>
+            </div>
+
+            <div class="action-row">
+                <button id="plan-btn" class="primary-btn">
+                    <i data-lucide="route"></i> Zaplanuj trasę
+                </button>
+            </div>
+        </header>
+
+        <!-- Route Details & Elevation Panel (hidden initially) -->
+        <div id="results-panel" class="glass-panel results-panel hidden">
+            <div id="results-header" style="cursor: pointer; user-select: none;">
+                <div class="panel-handle"></div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <h3 class="panel-title" style="margin: 0;">Dostępne trasy</h3>
+                    <i id="collapse-icon" data-lucide="chevron-down" style="width: 18px; height: 18px; color: var(--text-secondary); transition: transform 0.3s;"></i>
+                </div>
+            </div>
+            
+            <div id="results-scroll-container" style="display: flex; flex-direction: column; gap: 12px; overflow-y: auto; flex: 1;">
+                <div id="routes-container" class="routes-list">
+                    <!-- Route Cards will be dynamically inserted here -->
+                </div>
+    
+                <!-- Elevation Graph Section -->
+                <div class="elevation-section">
+                    <div class="elevation-header">
+                        <h4>Profil wysokościowy</h4>
+                        <span id="elevation-summary">Wybierz trasę, by zobaczyć profil</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="elevation-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loader -->
+    <div id="loader" class="loader-overlay hidden">
+        <div class="loader-spinner"></div>
+        <p class="loader-text">Obliczanie płaskich tras...</p>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+.kotlin/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures
+.externalNativeBuild
+.cxx
+
+# Local JDK and binaries
+/jdk17-extracted/
+/jdk17.zip
+
+# Local test outputs and scripts
+/screenshot.png
+/Uruchom_FlatCycle.ps1
+/Uruchom_FlatCycle.bat
+
