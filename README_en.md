@@ -2,6 +2,8 @@
 
 Leniwiec is an Android app for planning and exporting simple route tracks in GPX format. The current codebase wraps a local HTML/JavaScript interface inside an Android `WebView`, requests device location permissions, and exposes a native share action for generated GPX files.
 
+The app searches for roads with the least elevation gain, and generates loop routes by looking for the route with the fewest climbs
+
 ## What the app does
 
 The application loads a bundled web interface from `app/src/main/assets/www/index.html` instead of rendering its main screen with native Compose views. Based on the Android code and packaged web assets, the main goal is to let the user work with route data in the embedded interface and then share the generated GPX file through Android's native share sheet.
