@@ -90,5 +90,8 @@ This repository is at a very early stage: it has a single initial commit, no des
 - Rename package and internal project identifiers from `FlatCycle` to `Leniwiec`.
 - Add screenshots of the route editor/export UI.
 - Document the exact GPX workflow: creating, editing, previewing, and exporting routes.
+
+If you like this app, buy me a coffee.
+https://buycoffee.to/malcerz
 - Add release instructions for generating signed APK builds.
 - Expand the README once the map logic and feature set stabilize.
