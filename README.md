@@ -91,3 +91,6 @@ Repozytorium jest na bardzo wczesnym etapie: zawiera pojedynczy commit początko
 - Udokumentowanie dokładnego przepływu pracy z GPX: tworzenie, edycja, podgląd i eksport tras.
 - Dodanie instrukcji wydania dla generowania podpisanych buildów APK.
 - Rozbudowa README wraz ze stabilizacją logiki map i zestawu funkcji.
+
+Jeżeli podoba ci się ta aplikacja to kup mi kawę
+- https://buycoffee.to/malcerz
