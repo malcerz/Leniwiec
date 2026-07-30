@@ -9,6 +9,48 @@ let elevationChart = null;
 let hoverMarker = null;
 let currentMode = 'ab'; // 'ab' or 'loop'
 
+// Local routing async callback mechanism
+let routingCallbackId = 0;
+const routingCallbacks = {};
+
+// Called by Android native code when local route calculation completes
+window.routeCallback = function(callbackId, geojsonStr) {
+    const cb = routingCallbacks[callbackId];
+    if (cb) {
+        if (geojsonStr) {
+            try {
+                const geojson = JSON.parse(geojsonStr);
+                cb.resolve(geojson);
+            } catch (e) {
+                cb.reject(new Error("Failed to parse GeoJSON from local router"));
+            }
+        } else {
+            cb.reject(new Error("Local routing returned null"));
+        }
+        delete routingCallbacks[callbackId];
+    }
+};
+
+// Called by Android when download progress updates
+window.onDownloadProgress = function(regionId, progress) {
+    const el = document.getElementById('download-progress-bar');
+    const textEl = document.getElementById('download-progress-text');
+    if (el) el.style.width = (progress * 100) + '%';
+    if (textEl) textEl.textContent = Math.round(progress * 100) + '%';
+};
+
+// Called by Android when download completes
+window.onDownloadComplete = function(regionId) {
+    const btn = document.querySelector(`.download-btn[data-region="${regionId}"]`);
+    if (btn) {
+        btn.textContent = '✓ Pobrano';
+        btn.disabled = true;
+    }
+    hideLoader();
+    const textEl = document.getElementById('download-progress-text');
+    if (textEl) textEl.textContent = 'Gotowe!';
+};
+
 // Route colors (Emerald, Blue, Purple)
 const routeColors = {
     selectedFlat: '#10b981',
@@ -41,6 +83,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const abOnlyElements = document.querySelectorAll('.mode-ab-only');
     const loopOnlyElements = document.querySelectorAll('.mode-loop-only');
     
+    function updateRouteCountLabel() {
+        const desc = document.getElementById('route-count-desc');
+        const input = document.getElementById('route-count-input');
+        if (currentMode === 'loop') {
+            desc.textContent = 'kierunków pętli';
+            if (parseInt(input.value) > 66) input.value = 66;
+        } else {
+            desc.textContent = 'alternatyw';
+            if (parseInt(input.value) > 66) input.value = 66;
+        }
+    }
+    
     abBtn.addEventListener('click', () => {
         currentMode = 'ab';
         abBtn.classList.add('active');
@@ -50,6 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (endMarker) {
             endMarker.addTo(map);
         }
+        updateRouteCountLabel();
     });
     
     loopBtn.addEventListener('click', () => {
@@ -61,7 +116,26 @@ document.addEventListener('DOMContentLoaded', () => {
         if (endMarker) {
             map.removeLayer(endMarker);
         }
+        updateRouteCountLabel();
     });
+    
+    // Route count +/- buttons
+    function adjustRouteCount(delta) {
+        const input = document.getElementById('route-count-input');
+        let val = parseInt(input.value) + delta;
+        const min = parseInt(input.min);
+        const max = parseInt(input.max);
+        if (currentMode === 'ab' && val > 66) val = 66;
+        if (val < min) val = min;
+        if (val > max) val = max;
+        input.value = val;
+    }
+    
+    document.getElementById('route-count-minus').addEventListener('click', () => adjustRouteCount(-1));
+    document.getElementById('route-count-plus').addEventListener('click', () => adjustRouteCount(1));
+    
+    // Initialize route count label
+    updateRouteCountLabel();
     
     // Results Panel collapse/expand toggle
     const resultsHeader = document.getElementById('results-header');
@@ -249,6 +323,79 @@ function reverseGeocode(type, lat, lon) {
         });
 }
 
+// ── Local route fetching via Android native interface (async callback pattern) ──
+async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
+    // Check if native local routing is available
+    if (window.AndroidInterface && window.AndroidInterface.isLocalRoutingAvailable && window.AndroidInterface.isLocalRoutingAvailable()) {
+        return new Promise((resolve, reject) => {
+            const callbackId = ++routingCallbackId;
+            routingCallbacks[callbackId] = { resolve, reject };
+            window.AndroidInterface.calculateRouteAsync(lonlats, profile || 'trekking', idx, nogoLonLats, callbackId);
+            // Timeout after 60 seconds
+            setTimeout(() => {
+                if (routingCallbacks[callbackId]) {
+                    delete routingCallbacks[callbackId];
+                    reject(new Error("Local routing timeout"));
+                }
+            }, 60000);
+        });
+    }
+    // Fallback: online BRouter API
+    const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile || 'trekking'}&alternativeidx=${idx}&format=geojson`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Błąd pobierania trasy");
+    return res.json();
+}
+
+function buildNogoPoints(coordinates) {
+    return RouteGeo.buildNogoPoints(coordinates);
+}
+
+function mergeRouteSegments(segments) {
+    return RouteGeo.mergeRouteSegments(segments);
+}
+
+async function calculateLoopRoute(start, waypoint1, waypoint2) {
+    const profile = 'trekking';
+    const firstLeg = await fetchRouteLocal(`${start.lng},${start.lat}|${waypoint1.lng},${waypoint1.lat}`, profile, 0);
+    const firstNogoPoints = buildNogoPoints(firstLeg.features[0].geometry.coordinates);
+
+    const secondLeg = await fetchRouteLocal(
+        `${waypoint1.lng},${waypoint1.lat}|${waypoint2.lng},${waypoint2.lat}`,
+        profile,
+        0,
+        firstNogoPoints.join('|')
+    );
+    const secondNogoPoints = buildNogoPoints(secondLeg.features[0].geometry.coordinates);
+
+    const returnLeg = await fetchRouteLocal(
+        `${waypoint2.lng},${waypoint2.lat}|${start.lng},${start.lat}`,
+        profile,
+        0,
+        [...firstNogoPoints, ...secondNogoPoints].join('|')
+    );
+
+    const merged = mergeRouteSegments([firstLeg, secondLeg, returnLeg]);
+    const mergedCoords = merged.features[0].geometry.coordinates;
+
+    // Reject candidates that still backtrack over themselves instead of
+    // silently showing/trimming a broken loop.
+    const overlap = RouteGeo.findRouteOverlap(mergedCoords);
+    if (overlap.hasOverlap) {
+        throw new Error(`Pętla zawiera powielony odcinek (${overlap.overlapMeters}m, ${(overlap.overlapRatio * 100).toFixed(0)}%)`);
+    }
+
+    // Stricter point-by-point check: catches shorter duplicated stretches
+    // (e.g. a shared "neck" near the start) that the ratio-based check above
+    // can miss on long loops.
+    const duplicates = RouteGeo.findDuplicatePoints(mergedCoords);
+    if (duplicates.hasDuplicates) {
+        throw new Error(`Pętla przejeżdża ${duplicates.totalDuplicatedPoints} punktów trasy dwukrotnie`);
+    }
+
+    return merged;
+}
+
 // Route Calculation & Comparison
 async function calculateRoutes() {
     if (currentMode === 'ab') {
@@ -271,20 +418,17 @@ async function calculateRoutes() {
     routesData = [];
 
     let fetchPromises = [];
+    const routeCount = parseInt(document.getElementById('route-count-input').value) || 3;
 
     if (currentMode === 'ab') {
         const start = startMarker.getLatLng();
         const end = endMarker.getLatLng();
         const lonlats = `${start.lng},${start.lat}|${end.lng},${end.lat}`;
 
-        // Fetch 3 alternatives (0, 1, 2) parallelly
-        fetchPromises = [0, 1, 2].map(idx => {
-            const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=trekking&alternativeidx=${idx}&format=geojson`;
-            return fetch(url)
-                .then(res => {
-                    if (!res.ok) throw new Error("Błąd pobierania trasy");
-                    return res.json();
-                })
+        // Fetch N alternatives (0 .. routeCount-1)
+        const indices = Array.from({ length: routeCount }, (_, i) => i);
+        fetchPromises = indices.map(idx => {
+            return fetchRouteLocal(lonlats, 'trekking', idx)
                 .then(geojson => {
                     return { index: idx, geojson: geojson };
                 })
@@ -297,39 +441,35 @@ async function calculateRoutes() {
         const start = startMarker.getLatLng();
         const distanceVal = parseFloat(document.getElementById('loop-distance-input').value) || 10;
         
-        // Diamond/Square loop structure: S = D / 4
-        const S = distanceVal / 4;
-        
-        // Lat/Lon deltas approximations
+        // Real triangle loop: S is one vertex, W1/W2 the other two.
+        // A narrow apex angle at S (not 90°+) keeps S, W1, W2 non-collinear,
+        // so the middle leg (W1→W2) can't pass back through S.
+        // Combined with per-segment nogo routing, each of the 3 legs uses distinct roads.
         const latRad = start.lat * Math.PI / 180;
-        const deltaLatS = S / 111;
-        const deltaLonS = S / (111 * Math.cos(latRad));
+        const cosLat = Math.cos(latRad);
 
-        // 8 directions: N, NE, E, SE, S, SW, W, NW
-        const angles = [0, 45, 90, 135, 180, 225, 270, 315];
+        // Each waypoint at 40% of target distance (straight-line, road will be longer)
+        const wpDist = distanceVal * 0.4;
+
+        // Generate N evenly spaced angles
+        const step = 360 / routeCount;
+        const angles = Array.from({ length: routeCount }, (_, i) => i * step);
 
         fetchPromises = angles.map((angle, idx) => {
-            const rad1 = (angle - 45) * Math.PI / 180;
-            const rad2 = angle * Math.PI / 180;
-            const rad3 = (angle + 45) * Math.PI / 180;
+            const offsetDeg = 35; // Apex angle at S = 2*35 = 70° — a real triangle, not a line
+            const rad1 = (angle - offsetDeg) * Math.PI / 180;
+            const rad2 = (angle + offsetDeg) * Math.PI / 180;
 
-            const w1_lat = start.lat + deltaLatS * Math.cos(rad1);
-            const w1_lng = start.lng + deltaLonS * Math.sin(rad1);
+            const w1_lat = start.lat + (wpDist / 111) * Math.cos(rad1);
+            const w1_lng = start.lng + (wpDist / (111 * cosLat)) * Math.sin(rad1);
 
-            const w2_lat = start.lat + Math.sqrt(2) * deltaLatS * Math.cos(rad2);
-            const w2_lng = start.lng + Math.sqrt(2) * deltaLonS * Math.sin(rad2);
+            const w2_lat = start.lat + (wpDist / 111) * Math.cos(rad2);
+            const w2_lng = start.lng + (wpDist / (111 * cosLat)) * Math.sin(rad2);
 
-            const w3_lat = start.lat + deltaLatS * Math.cos(rad3);
-            const w3_lng = start.lng + deltaLonS * Math.sin(rad3);
+            const waypoint1 = L.latLng(w1_lat, w1_lng);
+            const waypoint2 = L.latLng(w2_lat, w2_lng);
 
-            const lonlats = `${start.lng},${start.lat}|${w1_lng.toFixed(6)},${w1_lat.toFixed(6)}|${w2_lng.toFixed(6)},${w2_lat.toFixed(6)}|${w3_lng.toFixed(6)},${w3_lat.toFixed(6)}|${start.lng},${start.lat}`;
-            const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=trekking&format=geojson`;
-
-            return fetch(url)
-                .then(res => {
-                    if (!res.ok) throw new Error("Błąd pobierania pętli");
-                    return res.json();
-                })
+            return calculateLoopRoute(start, waypoint1, waypoint2)
                 .then(geojson => {
                     return { index: idx, geojson: geojson };
                 })
@@ -409,6 +549,9 @@ async function calculateRoutes() {
             };
         });
 
+        // Sort by elevation gain (ascending) — najmniejsza liczba podjazdów pierwsza
+        routesData.sort((a, b) => a.elevationGain - b.elevationGain);
+
         // Identify the one with minimum elevation gain
         let flatestIdx = 0;
         let minGain = Infinity;
@@ -454,8 +597,8 @@ function displayRoutes() {
         const latlngs = route.coordinates.map(c => [c[1], c[0]]);
         const polyline = L.polyline(latlngs, {
             color: routeColors.unselected,
-            weight: 5,
-            opacity: 0.6,
+            weight: 2,
+            opacity: 0.2,
             lineJoin: 'round'
         }).addTo(map);
         
@@ -473,24 +616,22 @@ function displayRoutes() {
         // Custom name and badge
         let routeName = `Trasa ${idx + 1}`;
         if (currentMode === 'loop') {
-            const directions = [
-                "Pętla Północna (N)", 
-                "Pętla Pn-Wsch (NE)", 
-                "Pętla Wschodnia (E)", 
-                "Pętla Pd-Wsch (SE)", 
-                "Pętla Południowa (S)", 
-                "Pętla Pd-Zach (SW)", 
-                "Pętla Zachodnia (W)", 
-                "Pętla Pn-Zach (NW)"
-            ];
-            routeName = directions[route.index] || `Pętla ${idx + 1}`;
+            const compassLabels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "NNE", "ENE", "ESE", "SSE", "SSW", "WSW", "WNW", "NNW"];
+            const routeCount = parseInt(document.getElementById('route-count-input').value) || 8;
+            const step = 360 / routeCount;
+            const angle = route.index * step;
+            // Find closest compass label
+            const labelIdx = Math.round(angle / 22.5) % 16;
+            const label = compassLabels[labelIdx] || `${Math.round(angle)}°`;
+            routeName = `Pętla ${label} (${Math.round(angle)}°)`;
         }
         
         let badgeHtml = '';
         if (route.isFlatest) {
-            badgeHtml = `<span class="badge badge-flatest"><i data-lucide="sparkles" style="display:inline-block; width:10px; height:10px; margin-right:4px;"></i>Najbardziej płaska</span>`;
+            badgeHtml = '<span class="badge badge-flatest"><i data-lucide="sparkles" style="display:inline-block; width:10px; height:10px; margin-right:4px;"></i>Najbardziej płaska</span>';
         } else {
-            badgeHtml = `<span class="badge badge-alt">${currentMode === 'loop' ? 'Alternatywna' : `Alternatywna ${idx}`}</span>`;
+            const altLabel = currentMode === 'loop' ? 'Alternatywna' : 'Alternatywna ' + idx;
+            badgeHtml = '<span class="badge badge-alt">' + altLabel + '</span>';
         }
 
         card.innerHTML = `
@@ -541,8 +682,8 @@ function selectRoute(index) {
         // Reset polyline style
         mapRoutes[idx].setStyle({
             color: routeColors.unselected,
-            weight: 5,
-            opacity: 0.6,
+            weight: 2,
+            opacity: 0.2,
             zIndex: 1
         });
     });
@@ -741,3 +882,131 @@ function exportRouteGPX(route, routeName) {
         alert("Błąd generowania pliku GPX: " + err.message);
     }
 }
+
+// ── Data Management Modal ──
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Data management button
+    const dataManageBtn = document.getElementById('data-manage-btn');
+    const dataModal = document.getElementById('data-modal');
+    const dataModalClose = document.getElementById('data-modal-close');
+    const regionsList = document.getElementById('regions-list');
+    const deleteAllBtn = document.getElementById('delete-all-data-btn');
+    const progressContainer = document.getElementById('download-progress-container');
+    const dataStatusText = document.getElementById('data-status-text');
+
+    // Open modal
+    dataManageBtn.addEventListener('click', () => {
+        dataModal.classList.remove('hidden');
+        refreshRegionsList();
+    });
+
+    // Close modal
+    dataModalClose.addEventListener('click', () => {
+        dataModal.classList.add('hidden');
+    });
+
+    // Close modal on overlay click
+    dataModal.addEventListener('click', (e) => {
+        if (e.target === dataModal) {
+            dataModal.classList.add('hidden');
+        }
+    });
+
+    // Delete all data
+    deleteAllBtn.addEventListener('click', () => {
+        if (confirm('Usunąć wszystkie pobrane dane routingu?')) {
+            if (window.AndroidInterface && window.AndroidInterface.deleteAllData) {
+                window.AndroidInterface.deleteAllData();
+            }
+            deleteAllBtn.classList.add('hidden');
+            refreshRegionsList();
+        }
+    });
+
+    function refreshRegionsList() {
+        // Show loading
+        dataStatusText.textContent = 'Sprawdzanie pobranych danych...';
+        
+        if (!window.AndroidInterface || !window.AndroidInterface.getRegionsStatus) {
+            // Not running on Android or interface not available
+            regionsList.innerHTML = '<p style="color: var(--text-secondary); font-size: 13px;">Tryb offline dostępny tylko na urządzeniu z Androidem.</p>';
+            dataStatusText.textContent = '';
+            return;
+        }
+
+        // Get regions status from native
+        const regionsJson = window.AndroidInterface.getRegionsStatus();
+        const regions = JSON.parse(regionsJson);
+        const downloadedSegments = window.AndroidInterface.getDownloadedSegments
+            ? JSON.parse(window.AndroidInterface.getDownloadedSegments())
+            : [];
+        const totalSize = window.AndroidInterface.getDownloadedDataSize
+            ? window.AndroidInterface.getDownloadedDataSize()
+            : 0;
+
+        // Build region items
+        regionsList.innerHTML = '';
+        let hasData = false;
+
+        regions.forEach(region => {
+            const item = document.createElement('div');
+            item.className = 'region-item';
+
+            const info = document.createElement('div');
+            info.className = 'region-info';
+
+            const name = document.createElement('span');
+            name.className = 'region-name';
+            name.textContent = region.displayName;
+            info.appendChild(name);
+
+            const status = document.createElement('span');
+            status.className = 'region-status';
+            if (region.isFullyDownloaded) {
+                status.textContent = '✓ Pobrano';
+                status.style.color = 'var(--accent-emerald-light)';
+                hasData = true;
+            } else if (region.downloadedTiles > 0) {
+                status.textContent = `Pobrano ${region.downloadedTiles}/${region.totalTiles}`;
+            } else {
+                status.textContent = `Do pobrania: ${region.totalTiles} plików`;
+            }
+            info.appendChild(status);
+
+            item.appendChild(info);
+
+            const btn = document.createElement('button');
+            btn.className = 'download-btn';
+            btn.dataset.region = region.id;
+            if (region.isFullyDownloaded) {
+                btn.textContent = '✓ Pobrano';
+                btn.disabled = true;
+            } else {
+                btn.textContent = 'Pobierz';
+                btn.addEventListener('click', () => {
+                    btn.disabled = true;
+                    btn.textContent = 'Pobieranie...';
+                    progressContainer.classList.remove('hidden');
+                    document.getElementById('download-progress-bar').style.width = '0%';
+                    document.getElementById('download-progress-text').textContent = '0%';
+                    window.AndroidInterface.downloadRegion(region.id);
+                });
+            }
+            item.appendChild(btn);
+
+            regionsList.appendChild(item);
+        });
+
+        // Update status text
+        if (downloadedSegments.length > 0) {
+            const sizeMB = (totalSize / (1024 * 1024)).toFixed(1);
+            dataStatusText.textContent = `Pobrano ${downloadedSegments.length} plików (${sizeMB} MB)`;
+            deleteAllBtn.classList.remove('hidden');
+        } else {
+            dataStatusText.textContent = 'Brak pobranych danych. Wybierz region i kliknij "Pobierz".';
+            deleteAllBtn.classList.add('hidden');
+            progressContainer.classList.add('hidden');
+        }
+    }
+});

@@ -31,3 +31,4 @@ plugins {
 
 rootProject.name = "FlatCycle"
 include(":app")
+include(":brouter-lib")
