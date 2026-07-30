@@ -58,5 +58,40 @@
         };
     }
 
-    return { distanceMeters, calculateViaPoints };
+    /**
+     * Removes backtracking branches from a route by detecting when a point
+     * appears twice (within proximityMeters) with a detour between them.
+     *
+     * Example:  a b c c1 c2 c3 c2 c1 d
+     *                       |--detour--|
+     *           Result: a b c c1 d
+     *
+     * @param {Array} coordinates – [[lon,lat,ele], …]
+     * @param {number} proximityMeters – max distance for a "duplicate" (default 25)
+     * @param {number} minDetourPoints – min points in detour to consider cutting (default 4)
+     * @returns {Array} trimmed coordinates
+     */
+    function trimDuplicates(coordinates, proximityMeters = 25, minDetourPoints = 4) {
+        if (!coordinates || coordinates.length < minDetourPoints * 2) return coordinates;
+        const result = [...coordinates];
+        let i = 0;
+        while (i < result.length) {
+            let found = false;
+            for (let j = i + minDetourPoints; j < result.length; j++) {
+                const dist = distanceMeters(
+                    result[i][0], result[i][1],
+                    result[j][0], result[j][1]
+                );
+                if (dist <= proximityMeters) {
+                    result.splice(i + 1, j - i);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) i++;
+        }
+        return result;
+    }
+
+    return { distanceMeters, calculateViaPoints, trimDuplicates };
 });

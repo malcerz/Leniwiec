@@ -373,6 +373,10 @@ async function calculateLoopRoute(start, angleDeg, distanceVal) {
         throw new Error('Nie udało się wyznaczyć trasy pętli');
     }
 
+    // Trim any backtracking branches BRouter may have created
+    const trimmedCoords = RouteGeo.trimDuplicates(result.features[0].geometry.coordinates);
+    result.features[0].geometry.coordinates = trimmedCoords;
+
     return result;
 }
 
@@ -453,18 +457,14 @@ async function calculateRoutes() {
         routesData = validResults.map(res => {
             const feature = res.geojson.features[0];
             const coordinates = feature.geometry.coordinates; // [[lon, lat, elev], ...]
-            
-            // Calculate distance (from features properties or coordinates)
+
+            // Calculate distance from coordinates (ignores track-length property,
+            // which may be stale after calculateLoopRoute trims backtracking branches)
             let distanceMeters = 0;
-            if (feature.properties && feature.properties['track-length']) {
-                distanceMeters = parseFloat(feature.properties['track-length']);
-            } else {
-                // Fallback computation
-                for (let i = 0; i < coordinates.length - 1; i++) {
-                    const p1 = L.latLng(coordinates[i][1], coordinates[i][0]);
-                    const p2 = L.latLng(coordinates[i+1][1], coordinates[i+1][0]);
-                    distanceMeters += p1.distanceTo(p2);
-                }
+            for (let i = 0; i < coordinates.length - 1; i++) {
+                const p1 = L.latLng(coordinates[i][1], coordinates[i][0]);
+                const p2 = L.latLng(coordinates[i+1][1], coordinates[i+1][0]);
+                distanceMeters += p1.distanceTo(p2);
             }
 
             // Calculate elevation gain/loss
