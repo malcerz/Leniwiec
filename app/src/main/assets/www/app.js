@@ -347,53 +347,33 @@ async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
     return res.json();
 }
 
-function buildNogoPoints(coordinates) {
-    return RouteGeo.buildNogoPoints(coordinates);
-}
-
-function mergeRouteSegments(segments) {
-    return RouteGeo.mergeRouteSegments(segments);
-}
-
-async function calculateLoopRoute(start, waypoint1, waypoint2) {
-    const profile = 'trekking';
-    const firstLeg = await fetchRouteLocal(`${start.lng},${start.lat}|${waypoint1.lng},${waypoint1.lat}`, profile, 0);
-    const firstNogoPoints = buildNogoPoints(firstLeg.features[0].geometry.coordinates);
-
-    const secondLeg = await fetchRouteLocal(
-        `${waypoint1.lng},${waypoint1.lat}|${waypoint2.lng},${waypoint2.lat}`,
-        profile,
-        0,
-        firstNogoPoints.join('|')
-    );
-    const secondNogoPoints = buildNogoPoints(secondLeg.features[0].geometry.coordinates);
-
-    const returnLeg = await fetchRouteLocal(
-        `${waypoint2.lng},${waypoint2.lat}|${start.lng},${start.lat}`,
-        profile,
-        0,
-        [...firstNogoPoints, ...secondNogoPoints].join('|')
+// ── Loop via 4 waypoints ──
+// Forces a wide circuit using 5 waypoints (Start → P1 → Cel → P2 → Start).
+// Each segment goes in a distinctly different direction, so BRouter
+// naturally picks different roads — no nogo/overlap hacks needed.
+async function calculateLoopRoute(start, angleDeg, distanceVal) {
+    const points = RouteGeo.calculateViaPoints(
+        start.lat, start.lng,
+        angleDeg,
+        distanceVal * 1000,
+        0.20
     );
 
-    const merged = mergeRouteSegments([firstLeg, secondLeg, returnLeg]);
-    const mergedCoords = merged.features[0].geometry.coordinates;
+    const lonlats = [
+        `${start.lng},${start.lat}`,
+        `${points.p1.lng.toFixed(6)},${points.p1.lat.toFixed(6)}`,
+        `${points.cel.lng.toFixed(6)},${points.cel.lat.toFixed(6)}`,
+        `${points.p2.lng.toFixed(6)},${points.p2.lat.toFixed(6)}`,
+        `${start.lng},${start.lat}`
+    ].join('|');
 
-    // Reject candidates that still backtrack over themselves instead of
-    // silently showing/trimming a broken loop.
-    const overlap = RouteGeo.findRouteOverlap(mergedCoords);
-    if (overlap.hasOverlap) {
-        throw new Error(`Pętla zawiera powielony odcinek (${overlap.overlapMeters}m, ${(overlap.overlapRatio * 100).toFixed(0)}%)`);
+    const result = await fetchRouteLocal(lonlats, 'trekking', 0);
+
+    if (!result || !result.features || result.features.length === 0) {
+        throw new Error('Nie udało się wyznaczyć trasy pętli');
     }
 
-    // Stricter point-by-point check: catches shorter duplicated stretches
-    // (e.g. a shared "neck" near the start) that the ratio-based check above
-    // can miss on long loops.
-    const duplicates = RouteGeo.findDuplicatePoints(mergedCoords);
-    if (duplicates.hasDuplicates) {
-        throw new Error(`Pętla przejeżdża ${duplicates.totalDuplicatedPoints} punktów trasy dwukrotnie`);
-    }
-
-    return merged;
+    return result;
 }
 
 // Route Calculation & Comparison
@@ -440,36 +420,13 @@ async function calculateRoutes() {
     } else {
         const start = startMarker.getLatLng();
         const distanceVal = parseFloat(document.getElementById('loop-distance-input').value) || 10;
-        
-        // Real triangle loop: S is one vertex, W1/W2 the other two.
-        // A narrow apex angle at S (not 90°+) keeps S, W1, W2 non-collinear,
-        // so the middle leg (W1→W2) can't pass back through S.
-        // Combined with per-segment nogo routing, each of the 3 legs uses distinct roads.
-        const latRad = start.lat * Math.PI / 180;
-        const cosLat = Math.cos(latRad);
-
-        // Each waypoint at 40% of target distance (straight-line, road will be longer)
-        const wpDist = distanceVal * 0.4;
 
         // Generate N evenly spaced angles
         const step = 360 / routeCount;
         const angles = Array.from({ length: routeCount }, (_, i) => i * step);
 
         fetchPromises = angles.map((angle, idx) => {
-            const offsetDeg = 35; // Apex angle at S = 2*35 = 70° — a real triangle, not a line
-            const rad1 = (angle - offsetDeg) * Math.PI / 180;
-            const rad2 = (angle + offsetDeg) * Math.PI / 180;
-
-            const w1_lat = start.lat + (wpDist / 111) * Math.cos(rad1);
-            const w1_lng = start.lng + (wpDist / (111 * cosLat)) * Math.sin(rad1);
-
-            const w2_lat = start.lat + (wpDist / 111) * Math.cos(rad2);
-            const w2_lng = start.lng + (wpDist / (111 * cosLat)) * Math.sin(rad2);
-
-            const waypoint1 = L.latLng(w1_lat, w1_lng);
-            const waypoint2 = L.latLng(w2_lat, w2_lng);
-
-            return calculateLoopRoute(start, waypoint1, waypoint2)
+            return calculateLoopRoute(start, angle, distanceVal)
                 .then(geojson => {
                     return { index: idx, geojson: geojson };
                 })
