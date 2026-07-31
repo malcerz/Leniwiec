@@ -20,7 +20,7 @@ class LocalRouteService(private val appContext: Context) {
     private const val TAG = "LocalRouteService"
     private const val PROFILES_DIR = "brouter/profiles2"
     private const val SEGMENTS_DIR = "brouter/segments4"
-    private const val ROUTE_TIMEOUT_MS = 30_000L
+    private const val ROUTE_TIMEOUT_MS = 5_000L
   }
 
   private var initialized = false

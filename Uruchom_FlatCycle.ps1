@@ -1,7 +1,7 @@
-$SDK_PATH = "C:\Users\adram\AppData\Local\Android\Sdk"
+$SDK_PATH = "C:\Users\uck_p\AppData\Local\Android\Sdk"
 $ADB = "$SDK_PATH\platform-tools\adb.exe"
 $EMULATOR = "$SDK_PATH\emulator\emulator.exe"
-$APK_PATH = "A:\Leniwiec\app\build\outputs\apk\debug\app-debug.apk"
+$APK_PATH = "f:\_DEV\Leniwiec\app\build\outputs\apk\debug\app-debug.apk"
 
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host "  FlatCycle - Uruchamianie na Emulatorze  " -ForegroundColor Green
@@ -18,8 +18,8 @@ foreach ($line in $device_list) {
 }
 
 if (-not $is_running) {
-    Write-Host "[1/3] Uruchamianie emulatora (medium_phone)..."
-    Start-Process -FilePath $EMULATOR -ArgumentList "@medium_phone", "-no-snapshot"
+    Write-Host "[1/3] Uruchamianie emulatora (phone)..."
+    Start-Process -FilePath $EMULATOR -ArgumentList "@phone", "-no-snapshot"
     
     Write-Host "[2/3] Oczekiwanie na uruchomienie systemu Android..."
     # Wait for basic ADB connection

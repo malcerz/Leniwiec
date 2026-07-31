@@ -27,6 +27,7 @@ import com.example.flatcycle.routing.RouteDataManager
 import com.example.flatcycle.theme.FlatCycleTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,6 +38,43 @@ class MainActivity : ComponentActivity() {
   private val LOCATION_PERMISSION_REQUEST_CODE = 1001
   private lateinit var routeService: LocalRouteService
   private lateinit var dataManager: RouteDataManager
+
+  private var pendingGpxContent: String? = null
+  private val createDocumentLauncher = registerForActivityResult(
+    ActivityResultContracts.StartActivityForResult()
+  ) { result ->
+    if (result.resultCode == android.app.Activity.RESULT_OK) {
+      val uri = result.data?.data
+      if (uri != null && pendingGpxContent != null) {
+        lifecycleScope.launch(Dispatchers.IO) {
+          try {
+            contentResolver.openOutputStream(uri)?.use { outputStream ->
+              outputStream.write(pendingGpxContent!!.toByteArray())
+            }
+            withContext(Dispatchers.Main) {
+              Toast.makeText(this@MainActivity, "Zapisano plik GPX!", Toast.LENGTH_SHORT).show()
+            }
+          } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+              Toast.makeText(this@MainActivity, "Błąd zapisu: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+          } finally {
+            pendingGpxContent = null
+          }
+        }
+      }
+    }
+  }
+
+  fun saveGPXFile(fileName: String, gpxContent: String) {
+    pendingGpxContent = gpxContent
+    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = "application/gpx+xml"
+      putExtra(Intent.EXTRA_TITLE, fileName)
+    }
+    createDocumentLauncher.launch(intent)
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -133,6 +171,17 @@ class WebAppInterface(
         activity.startActivity(Intent.createChooser(intent, "Udostępnij trasę GPX"))
       } catch (e: Exception) {
         Toast.makeText(activity, "Błąd podczas udostępniania GPX: ${e.message}", Toast.LENGTH_LONG).show()
+      }
+    }
+  }
+
+  @JavascriptInterface
+  fun saveGPX(fileName: String, gpxContent: String) {
+    activity.runOnUiThread {
+      try {
+        activity.saveGPXFile(fileName, gpxContent)
+      } catch (e: Exception) {
+        Toast.makeText(activity, "Błąd podczas zapisu GPX: ${e.message}", Toast.LENGTH_LONG).show()
       }
     }
   }

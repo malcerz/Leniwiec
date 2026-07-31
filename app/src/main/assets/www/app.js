@@ -143,13 +143,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const collapseIcon = document.getElementById('collapse-icon');
     
     resultsHeader.addEventListener('click', () => {
-        const isCollapsed = resultsPanel.classList.toggle('collapsed');
-        if (isCollapsed) {
-            collapseIcon.style.transform = 'rotate(180deg)';
-        } else {
-            collapseIcon.style.transform = 'rotate(0deg)';
-        }
+        const searchPanel = document.querySelector('.search-panel');
+        const showUiBtn = document.getElementById('show-ui-btn');
+        if (resultsPanel) resultsPanel.classList.add('hidden');
+        if (searchPanel) searchPanel.classList.add('hidden');
+        if (showUiBtn) showUiBtn.classList.remove('hidden');
     });
+
+    const showUiBtn = document.getElementById('show-ui-btn');
+    if (showUiBtn) {
+        showUiBtn.addEventListener('click', () => {
+            const searchPanel = document.querySelector('.search-panel');
+            if (resultsPanel) {
+                resultsPanel.classList.remove('hidden', 'collapsed');
+            }
+            if (searchPanel) {
+                searchPanel.classList.remove('hidden');
+            }
+            showUiBtn.classList.add('hidden');
+            if (collapseIcon) collapseIcon.style.transform = 'rotate(0deg)';
+        });
+    }
 
     // Click on map to set points
     map.on('click', onMapClick);
@@ -347,10 +361,9 @@ async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
     return res.json();
 }
 
-// ── Loop via 4 waypoints ──
-// Forces a wide circuit using 5 waypoints (Start → P1 → Cel → P2 → Start).
-// Each segment goes in a distinctly different direction, so BRouter
-// naturally picks different roads — no nogo/overlap hacks needed.
+// ── Loop via 4 waypoints (Simple Single Request) ──
+// Forces a loop using 5 waypoints (Start → P1 → Cel → P2 → Start) on a square.
+// Calculates everything in one fast BRouter call.
 async function calculateLoopRoute(start, angleDeg, distanceVal) {
     const points = RouteGeo.calculateViaPoints(
         start.lat, start.lng,
@@ -372,10 +385,6 @@ async function calculateLoopRoute(start, angleDeg, distanceVal) {
     if (!result || !result.features || result.features.length === 0) {
         throw new Error('Nie udało się wyznaczyć trasy pętli');
     }
-
-    // Trim any backtracking branches BRouter may have created
-    const trimmedCoords = RouteGeo.trimDuplicates(result.features[0].geometry.coordinates);
-    result.features[0].geometry.coordinates = trimmedCoords;
 
     return result;
 }
@@ -409,14 +418,18 @@ async function calculateRoutes() {
         const end = endMarker.getLatLng();
         const lonlats = `${start.lng},${start.lat}|${end.lng},${end.lat}`;
 
-        // Fetch N alternatives (0 .. routeCount-1)
+        let completed = 0;
         const indices = Array.from({ length: routeCount }, (_, i) => i);
         fetchPromises = indices.map(idx => {
             return fetchRouteLocal(lonlats, 'trekking', idx)
                 .then(geojson => {
+                    completed++;
+                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
                     return { index: idx, geojson: geojson };
                 })
                 .catch(err => {
+                    completed++;
+                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
                     console.warn(`Alternative ${idx} failed or not available`, err);
                     return null;
                 });
@@ -429,12 +442,17 @@ async function calculateRoutes() {
         const step = 360 / routeCount;
         const angles = Array.from({ length: routeCount }, (_, i) => i * step);
 
+        let completed = 0;
         fetchPromises = angles.map((angle, idx) => {
             return calculateLoopRoute(start, angle, distanceVal)
                 .then(geojson => {
+                    completed++;
+                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
                     return { index: idx, geojson: geojson };
                 })
                 .catch(err => {
+                    completed++;
+                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
                     console.warn(`Loop candidate ${idx} at angle ${angle} failed`, err);
                     return null;
                 });
@@ -443,18 +461,18 @@ async function calculateRoutes() {
 
     try {
         const results = await Promise.all(fetchPromises);
-        hideLoader();
+            hideLoader();
 
-        // Filter out failed routes
-        const validResults = results.filter(r => r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0);
+            // Filter out failed routes
+            const validResults = results.filter(r => r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0);
 
-        if (validResults.length === 0) {
-            alert("Nie znaleziono tras dla wybranych punktów. Spróbuj zmienić lokalizację.");
-            return;
-        }
+            if (validResults.length === 0) {
+                alert("Nie znaleziono tras dla wybranych punktów. Spróbuj zmienić lokalizację.");
+                return;
+            }
 
-        // Process route metrics
-        routesData = validResults.map(res => {
+            // Process route metrics
+            routesData = validResults.map(res => {
             const feature = res.geojson.features[0];
             const coordinates = feature.geometry.coordinates; // [[lon, lat, elev], ...]
 
@@ -530,6 +548,10 @@ async function calculateRoutes() {
         const panel = document.getElementById('results-panel');
         panel.classList.remove('hidden', 'collapsed');
         document.getElementById('collapse-icon').style.transform = 'rotate(0deg)';
+        const searchPanel = document.querySelector('.search-panel');
+        if (searchPanel) searchPanel.classList.remove('hidden');
+        const showUiBtn = document.getElementById('show-ui-btn');
+        if (showUiBtn) showUiBtn.classList.add('hidden');
 
     } catch (error) {
         hideLoader();
@@ -610,17 +632,24 @@ function displayRoutes() {
                     <span>+${route.elevationGain}m</span>
                 </div>
             </div>
-            <div style="display: flex; justify-content: flex-end; margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
-                <button class="gpx-btn" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 4px; transition: background 0.2s;">
-                    <i data-lucide="download" style="width: 12px; height: 12px;"></i> GPX
+            <div style="display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
+                <button class="gpx-share-btn" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 4px; transition: background 0.2s;">
+                    <i data-lucide="share-2" style="width: 12px; height: 12px;"></i> Udostępnij
+                </button>
+                <button class="gpx-save-btn" style="background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 4px; transition: background 0.2s;">
+                    <i data-lucide="download" style="width: 12px; height: 12px;"></i> Zapisz
                 </button>
             </div>
         `;
 
         card.addEventListener('click', () => selectRoute(idx));
-        card.querySelector('.gpx-btn').addEventListener('click', (e) => {
+        card.querySelector('.gpx-share-btn').addEventListener('click', (e) => {
             e.stopPropagation();
-            exportRouteGPX(route, routeName);
+            exportRouteGPX(route, routeName, 'share');
+        });
+        card.querySelector('.gpx-save-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            exportRouteGPX(route, routeName, 'save');
         });
         container.appendChild(card);
     });
@@ -790,7 +819,7 @@ function hexToRgba(hex, alpha) {
 }
 
 // Export selected route to GPX
-function exportRouteGPX(route, routeName) {
+function exportRouteGPX(route, routeName, action = 'share') {
     try {
         const coordinates = route.coordinates; // Array of [lon, lat, ele] from geojson
         if (!coordinates || coordinates.length === 0) {
@@ -821,7 +850,9 @@ function exportRouteGPX(route, routeName) {
 
         const safeFileName = routeName.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".gpx";
 
-        if (window.AndroidInterface && window.AndroidInterface.shareGPX) {
+        if (action === 'save' && window.AndroidInterface && window.AndroidInterface.saveGPX) {
+            window.AndroidInterface.saveGPX(safeFileName, gpx);
+        } else if (action === 'share' && window.AndroidInterface && window.AndroidInterface.shareGPX) {
             window.AndroidInterface.shareGPX(safeFileName, gpx);
         } else {
             // Fallback for desktop browser testing
