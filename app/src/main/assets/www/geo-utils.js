@@ -331,6 +331,146 @@
         };
     }
 
+    /**
+     * Diagnostic: finds all pairs of points on the route that are physically
+     * close (< proximityMeters) but far apart in the sequence (> minIndexGap).
+     * Skips the first/last `skipEndsMeters` of the route.
+     *
+     * Returns array of { indexA, indexB, distanceMeters, pathDistA, pathDistB }
+     */
+    function findClosePointPairs(coordinates, options = {}) {
+        const proximityMeters = options.proximityMeters ?? 5;
+        const skipEndsMeters = options.skipEndsMeters ?? 500;
+        const minIndexGap = options.minIndexGap ?? 10;
+
+        if (!coordinates || coordinates.length < minIndexGap * 2) return [];
+
+        // Build cumulative distance array
+        const cumDist = [0];
+        for (let i = 1; i < coordinates.length; i++) {
+            cumDist.push(cumDist[i - 1] + distanceMeters(
+                coordinates[i - 1][0], coordinates[i - 1][1],
+                coordinates[i][0], coordinates[i][1]
+            ));
+        }
+        const totalDist = cumDist[cumDist.length - 1];
+
+        const pairs = [];
+        for (let i = 0; i < coordinates.length; i++) {
+            // Skip points in the start/end zones
+            if (cumDist[i] < skipEndsMeters) continue;
+            if (cumDist[i] > totalDist - skipEndsMeters) continue;
+
+            for (let j = i + minIndexGap; j < coordinates.length; j++) {
+                if (cumDist[j] > totalDist - skipEndsMeters) continue;
+                if (cumDist[j] < skipEndsMeters) continue;
+
+                const dist = distanceMeters(
+                    coordinates[i][0], coordinates[i][1],
+                    coordinates[j][0], coordinates[j][1]
+                );
+                if (dist < proximityMeters) {
+                    pairs.push({
+                        indexA: i,
+                        indexB: j,
+                        distanceMeters: dist,
+                        pathDistA: cumDist[i],
+                        pathDistB: cumDist[j]
+                    });
+                }
+            }
+        }
+        return pairs;
+    }
+
+    /**
+     * Removes backtracking branches from a route.
+     * 
+     * Algorithm: walk along the route and for each point, check if any later
+     * point (at least minIndexGap apart) is within proximityMeters. If found,
+     * splice out the points between them (the "detour/branch"). The first
+     * and last `skipEndsMeters` of the route are left untouched.
+     *
+     * @param {Array} coordinates – [[lon,lat,ele], …]
+     * @param {Object} options
+     * @param {number} options.proximityMeters – max distance to consider a "match" (default 5)
+     * @param {number} options.skipEndsMeters – leave start/end untouched (default 500)
+     * @param {number} options.minIndexGap – min points between i and j (default 10)
+     * @returns {Array} cleaned coordinates
+     */
+    function removeBacktracking(coordinates, options = {}) {
+        const proximityMeters = options.proximityMeters ?? 5;
+        const skipEndsMeters = options.skipEndsMeters ?? 500;
+        const minIndexGap = options.minIndexGap ?? 10;
+
+        if (!coordinates || coordinates.length < minIndexGap * 2) return coordinates;
+
+        const result = [...coordinates];
+
+        // Recalculate cumulative distances from scratch each pass
+        function buildCumDist(coords) {
+            const cd = [0];
+            for (let k = 1; k < coords.length; k++) {
+                cd.push(cd[k - 1] + distanceMeters(
+                    coords[k - 1][0], coords[k - 1][1],
+                    coords[k][0], coords[k][1]
+                ));
+            }
+            return cd;
+        }
+
+        let changed = true;
+        while (changed) {
+            changed = false;
+            const cumDist = buildCumDist(result);
+            const totalDist = cumDist[cumDist.length - 1];
+
+            for (let i = 0; i < result.length - minIndexGap; i++) {
+                // Skip points in start zone
+                if (cumDist[i] < skipEndsMeters) continue;
+                // Skip points in end zone
+                if (cumDist[i] > totalDist - skipEndsMeters) continue;
+
+                // Search for a matching close point further in the sequence
+                let bestJ = -1;
+                let bestDist = Infinity;
+
+                for (let j = i + minIndexGap; j < result.length; j++) {
+                    // j must also be outside end zone
+                    if (cumDist[j] > totalDist - skipEndsMeters) break;
+
+                    const dist = distanceMeters(
+                        result[i][0], result[i][1],
+                        result[j][0], result[j][1]
+                    );
+                    if (dist < proximityMeters && dist < bestDist) {
+                        // Calculate detour distance along the path
+                        const detourDist = cumDist[j] - cumDist[i];
+                        // If the detour is more than 20% of the total route,
+                        // it is the main loop itself, not a backtracking spike.
+                        if (detourDist > totalDist * 0.20) {
+                            continue;
+                        }
+
+                        bestJ = j;
+                        bestDist = dist;
+                        // Don't break — find the FURTHEST matching j
+                        // to remove the largest backtracking section
+                    }
+                }
+
+                if (bestJ !== -1) {
+                    // Splice out the detour: keep point i, remove i+1..bestJ-1, keep bestJ
+                    result.splice(i + 1, bestJ - i - 1);
+                    changed = true;
+                    break; // restart scan with fresh cumulative distances
+                }
+            }
+        }
+
+        return result;
+    }
+
     return {
         distanceMeters,
         bearingDeg,
@@ -340,6 +480,8 @@
         mergeRouteSegments,
         decimateCoordinates,
         findRouteOverlap,
-        findDuplicatePoints
+        findDuplicatePoints,
+        findClosePointPairs,
+        removeBacktracking
     };
 });

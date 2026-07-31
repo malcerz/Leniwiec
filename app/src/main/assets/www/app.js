@@ -386,10 +386,15 @@ async function calculateLoopRoute(start, angleDeg, distanceVal) {
         throw new Error('Nie udało się wyznaczyć trasy pętli');
     }
 
+    // Remove any backtracking branches, preserving the first/last 500m
+    result.features[0].geometry.coordinates = RouteGeo.removeBacktracking(
+        result.features[0].geometry.coordinates,
+        { proximityMeters: 5, skipEndsMeters: 500, minIndexGap: 10 }
+    );
+
     return result;
 }
 
-// Route Calculation & Comparison
 async function calculateRoutes() {
     if (currentMode === 'ab') {
         if (!startMarker || !endMarker) {
@@ -410,61 +415,96 @@ async function calculateRoutes() {
     mapRoutes = [];
     routesData = [];
 
-    let fetchPromises = [];
+    let results = [];
     const routeCount = parseInt(document.getElementById('route-count-input').value) || 3;
 
-    if (currentMode === 'ab') {
-        const start = startMarker.getLatLng();
-        const end = endMarker.getLatLng();
-        const lonlats = `${start.lng},${start.lat}|${end.lng},${end.lat}`;
-
-        let completed = 0;
-        const indices = Array.from({ length: routeCount }, (_, i) => i);
-        fetchPromises = indices.map(idx => {
-            return fetchRouteLocal(lonlats, 'trekking', idx)
-                .then(geojson => {
-                    completed++;
-                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                    return { index: idx, geojson: geojson };
-                })
-                .catch(err => {
-                    completed++;
-                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                    console.warn(`Alternative ${idx} failed or not available`, err);
-                    return null;
-                });
-        });
-    } else {
-        const start = startMarker.getLatLng();
-        const distanceVal = parseFloat(document.getElementById('loop-distance-input').value) || 10;
-
-        // Generate N evenly spaced angles
-        const step = 360 / routeCount;
-        const angles = Array.from({ length: routeCount }, (_, i) => i * step);
-
-        let completed = 0;
-        fetchPromises = angles.map((angle, idx) => {
-            return calculateLoopRoute(start, angle, distanceVal)
-                .then(geojson => {
-                    completed++;
-                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                    return { index: idx, geojson: geojson };
-                })
-                .catch(err => {
-                    completed++;
-                    showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                    console.warn(`Loop candidate ${idx} at angle ${angle} failed`, err);
-                    return null;
-                });
-        });
-    }
-
     try {
-        const results = await Promise.all(fetchPromises);
-            hideLoader();
+        if (currentMode === 'ab') {
+            const start = startMarker.getLatLng();
+            const end = endMarker.getLatLng();
+            const lonlats = `${start.lng},${start.lat}|${end.lng},${end.lat}`;
 
-            // Filter out failed routes
-            const validResults = results.filter(r => r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0);
+            let completed = 0;
+            const indices = Array.from({ length: routeCount }, (_, i) => i);
+            const fetchPromises = indices.map(idx => {
+                return fetchRouteLocal(lonlats, 'trekking', idx)
+                    .then(geojson => {
+                        completed++;
+                        showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
+                        return { index: idx, geojson: geojson };
+                    })
+                    .catch(err => {
+                        completed++;
+                        showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
+                        console.warn(`Alternative ${idx} failed or not available`, err);
+                        return null;
+                    });
+            });
+            results = await Promise.all(fetchPromises);
+        } else {
+            const start = startMarker.getLatLng();
+            const distanceVal = parseFloat(document.getElementById('loop-distance-input').value) || 10;
+
+            const triedAngles = new Set();
+            let angleOffset = 0;
+            let completed = 0;
+
+            while (results.length < routeCount && triedAngles.size < 36) {
+                const needed = routeCount - results.length;
+                const step = 360 / routeCount;
+                const newAngles = [];
+                
+                for (let i = 0; i < routeCount; i++) {
+                    const angle = (i * step + angleOffset) % 360;
+                    if (!triedAngles.has(angle)) {
+                        newAngles.push(angle);
+                    }
+                }
+
+                if (newAngles.length === 0) {
+                    angleOffset = (angleOffset + 15) % 360;
+                    continue;
+                }
+
+                const anglesToTry = newAngles.slice(0, needed);
+                anglesToTry.forEach(a => triedAngles.add(a));
+
+                showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
+
+                const batchPromises = anglesToTry.map((angle) => {
+                    return calculateLoopRoute(start, angle, distanceVal)
+                        .then(geojson => {
+                            completed++;
+                            showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
+                            return { geojson };
+                        })
+                        .catch(err => {
+                            console.warn(`Loop candidate at angle ${angle} failed`, err);
+                            return null;
+                        });
+                });
+
+                const batchResults = await Promise.all(batchPromises);
+                
+                for (const r of batchResults) {
+                    if (r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0) {
+                        results.push({
+                            index: results.length,
+                            geojson: r.geojson
+                        });
+                    }
+                }
+
+                if (results.length < routeCount) {
+                    angleOffset = (angleOffset + 15) % 360;
+                }
+            }
+        }
+
+        hideLoader();
+
+        // Filter out failed routes
+        const validResults = results.filter(r => r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0);
 
             if (validResults.length === 0) {
                 alert("Nie znaleziono tras dla wybranych punktów. Spróbuj zmienić lokalizację.");
