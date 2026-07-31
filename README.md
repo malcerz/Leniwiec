@@ -70,6 +70,8 @@ Wygenerowany plik APK powinien pojawić się w:
 app/build/outputs/apk/debug/
 ```
 
+Dla ułatwienia, skompilowany plik APK jest również kopiowany do głównego katalogu repozytorium jako [app-debug.apk](file:///f:/_DEV/Leniwiec/app-debug.apk) oraz do folderu assets jako [app/src/main/assets/app-debug.apk](file:///f:/_DEV/Leniwiec/app/src/main/assets/app-debug.apk).
+
 ## Uprawnienia
 
 Aplikacja aktualnie deklaruje następujące uprawnienia:

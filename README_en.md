@@ -71,6 +71,8 @@ The generated APK should appear in:
 app/build/outputs/apk/debug/
 ```
 
+For convenience, the pre-compiled debug APK is also copied to the repository root as [app-debug.apk](file:///f:/_DEV/Leniwiec/app-debug.apk) and to the assets folder as [app/src/main/assets/app-debug.apk](file:///f:/_DEV/Leniwiec/app/src/main/assets/app-debug.apk).
+
 ## Permissions
 
 The app currently declares the following permissions:
