@@ -26,14 +26,14 @@ The project uses Android SDK 36, minimum SDK 24, Java 17, and Jetpack Compose wi
 ```
 app/
   src/main/
-    java/com/example/flatcycle/   # Android host app
+    java/com.example.leniwiec/   # Android host app
     assets/www/                   # Embedded web UI
     res/                          # Android resources
     AndroidManifest.xml
 gradle/                           # Gradle wrapper and version catalog
 build.gradle.kts                  # Root build configuration
 settings.gradle.kts               # Project setup
-Uruchom_FlatCycle.ps1             # Windows helper script
+Uruchom_Leniwiec.ps1             # Windows helper script
 ```
 
 ## Build and run
@@ -85,11 +85,11 @@ These permissions are consistent with an app that can work with location-aware r
 
 ## Current status
 
-This repository is at a very early stage: it has a single initial commit, no description, no tags, no releases, and no existing README in the repository root. The codebase also still contains temporary internal naming such as `FlatCycle` and `com.example.flatcycle`, so a future cleanup would help align branding with the Leniwiec project name.
+This repository is at a very early stage: it has a single initial commit, no description, no tags, no releases, and no existing README in the repository root. The codebase also still contains temporary internal naming such as `Leniwiec` and `com.example.leniwiec`, so a future cleanup would help align branding with the Leniwiec project name.
 
 ## Next improvements
 
-- Rename package and internal project identifiers from `FlatCycle` to `Leniwiec`.
+- Rename package and internal project identifiers from `Leniwiec` to `Leniwiec`.
 - Add screenshots of the route editor/export UI.
 - Document the exact GPX workflow: creating, editing, previewing, and exporting routes.
 

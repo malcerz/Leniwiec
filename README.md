@@ -25,14 +25,14 @@ Projekt korzysta z Android SDK 36, minimalnego SDK 24, Javy 17 oraz Jetpack Comp
 ```
 app/
   src/main/
-    java/com/example/flatcycle/   # Kod aplikacji Android
+    java/com.example.leniwiec/   # Kod aplikacji Android
     assets/www/                   # Osadzony interfejs webowy
     res/                          # Zasoby Androida
     AndroidManifest.xml
 gradle/                           # Gradle wrapper i katalog wersji
 build.gradle.kts                  # Główna konfiguracja builda
 settings.gradle.kts               # Konfiguracja projektu
-Uruchom_FlatCycle.ps1             # Skrypt pomocniczy dla Windows
+Uruchom_Leniwiec.ps1             # Skrypt pomocniczy dla Windows
 ```
 
 ## Budowanie i uruchamianie
@@ -84,11 +84,11 @@ Te uprawnienia są spójne z aplikacją, która może operować na danych trasy 
 
 ## Obecny status
 
-Repozytorium jest na bardzo wczesnym etapie: zawiera pojedynczy commit początkowy, brak opisu, brak tagów, brak wydań (releases) oraz brak istniejącego pliku README w katalogu głównym przed tą zmianą. Kod zawiera też tymczasowe wewnętrzne nazewnictwo, takie jak `FlatCycle` i `com.example.flatcycle`, więc w przyszłości warto ujednolicić nazewnictwo z nazwą projektu Leniwiec.
+Repozytorium jest na bardzo wczesnym etapie: zawiera pojedynczy commit początkowy, brak opisu, brak tagów, brak wydań (releases) oraz brak istniejącego pliku README w katalogu głównym przed tą zmianą. Kod zawiera też tymczasowe wewnętrzne nazewnictwo, takie jak `Leniwiec` i `com.example.leniwiec`, więc w przyszłości warto ujednolicić nazewnictwo z nazwą projektu Leniwiec.
 
 ## Dalsze usprawnienia
 
-- Zmiana nazwy pakietu i wewnętrznych identyfikatorów projektu z `FlatCycle` na `Leniwiec`.
+- Zmiana nazwy pakietu i wewnętrznych identyfikatorów projektu z `Leniwiec` na `Leniwiec`.
 - Dodanie zrzutów ekranu edytora/eksportu tras.
 - Udokumentowanie dokładnego przepływu pracy z GPX: tworzenie, edycja, podgląd i eksport tras.
 - Dodanie instrukcji wydania dla generowania podpisanych buildów APK.

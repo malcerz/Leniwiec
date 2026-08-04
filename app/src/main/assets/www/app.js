@@ -8,19 +8,28 @@ let mapRoutes = []; // Stores Leaflet polyline objects
 let elevationChart = null;
 let hoverMarker = null;
 let currentMode = 'ab'; // 'ab' or 'loop'
+// Store per‑route speed (k‑links/s)
+const routeSpeeds = {};
+
 
 // Local routing async callback mechanism
 let routingCallbackId = 0;
 const routingCallbacks = {};
+const activeRoutingProgress = {};
 
 // Called by Android native code when local route calculation completes
 window.routeCallback = function(callbackId, geojsonStr) {
     const cb = routingCallbacks[callbackId];
+    delete activeRoutingProgress[callbackId];
     if (cb) {
-        if (geojsonStr) {
+        if (geojsonStr && geojsonStr !== 'null') {
             try {
                 const geojson = JSON.parse(geojsonStr);
-                cb.resolve(geojson);
+                if (geojson) {
+                    cb.resolve(geojson);
+                } else {
+                    cb.reject(new Error("Local routing returned null"));
+                }
             } catch (e) {
                 cb.reject(new Error("Failed to parse GeoJSON from local router"));
             }
@@ -30,6 +39,41 @@ window.routeCallback = function(callbackId, geojsonStr) {
         delete routingCallbacks[callbackId];
     }
 };
+
+window.onRoutingProgress = function(callbackId, linksProcessed, elapsedMs) {
+    if (activeRoutingProgress[callbackId]) {
+        activeRoutingProgress[callbackId] = { linksProcessed, elapsedMs };
+        // Compute speed for this route and store
+        const seconds = elapsedMs / 1000;
+        const speedK = (linksProcessed / seconds) / 1000;
+        routeSpeeds[callbackId] = speedK;
+        updateLoaderProgressText();
+    }
+};
+
+
+function updateLoaderProgressText() {
+    let totalLinks = 0;
+    let maxElapsed = 0;
+    let count = 0;
+    for (const id in activeRoutingProgress) {
+        const progress = activeRoutingProgress[id];
+        totalLinks += progress.linksProcessed;
+        if (progress.elapsedMs > maxElapsed) {
+            maxElapsed = progress.elapsedMs;
+        }
+        count++;
+    }
+    if (count > 0 && maxElapsed > 0) {
+        const seconds = maxElapsed / 1000;
+        const speedK = (totalLinks / seconds) / 1000;
+        const loaderText = document.querySelector('#loader .loader-text');
+        if (loaderText) {
+            const baseText = loaderText.textContent.split('(')[0].trim();
+            loaderText.textContent = `${baseText} (${speedK.toFixed(1)} k-links/s)`;
+        }
+    }
+}
 
 // Called by Android when download progress updates
 window.onDownloadProgress = function(regionId, progress) {
@@ -339,20 +383,46 @@ function reverseGeocode(type, lat, lon) {
 
 // ── Local route fetching via Android native interface (async callback pattern) ──
 async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
+    // After a route finishes, check if all are done and show average speed
+    if (Object.keys(activeRoutingProgress).length === 0) {
+        // All routes finished – compute average speed
+        const speeds = Object.values(routeSpeeds);
+        if (speeds.length > 0) {
+            const avg = (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1);
+            const summaryEl = document.getElementById('average-speed-summary');
+            if (summaryEl) {
+                summaryEl.textContent = `Średnia prędkość: ${avg} k‑links/s`;
+            } else {
+                const el = document.createElement('div');
+                el.id = 'average-speed-summary';
+                el.style.marginTop = '8px';
+                el.style.fontWeight = '500';
+                el.textContent = `Średnia prędkość: ${avg} k‑links/s`;
+                const container = document.getElementById('results-panel');
+                if (container) container.appendChild(el);
+            }
+        }
+    }
     // Check if native local routing is available
     if (window.AndroidInterface && window.AndroidInterface.isLocalRoutingAvailable && window.AndroidInterface.isLocalRoutingAvailable()) {
-        return new Promise((resolve, reject) => {
-            const callbackId = ++routingCallbackId;
-            routingCallbacks[callbackId] = { resolve, reject };
-            window.AndroidInterface.calculateRouteAsync(lonlats, profile || 'trekking', idx, nogoLonLats, callbackId);
-            // Timeout after 60 seconds
-            setTimeout(() => {
-                if (routingCallbacks[callbackId]) {
-                    delete routingCallbacks[callbackId];
-                    reject(new Error("Local routing timeout"));
-                }
-            }, 60000);
-        });
+        try {
+            return await new Promise((resolve, reject) => {
+                const callbackId = ++routingCallbackId;
+                routingCallbacks[callbackId] = { resolve, reject };
+                activeRoutingProgress[callbackId] = { linksProcessed: 0, elapsedMs: 0 };
+                window.AndroidInterface.calculateRouteAsync(lonlats, profile || 'trekking', idx, nogoLonLats, callbackId);
+                // Timeout after 15 seconds
+                setTimeout(() => {
+                    if (routingCallbacks[callbackId]) {
+                        delete routingCallbacks[callbackId];
+                        delete activeRoutingProgress[callbackId];
+                        reject(new Error("Local routing timeout"));
+                    }
+                }, 15000);
+            });
+        } catch (err) {
+            console.warn("Local routing failed/timeout. Falling back to online BRouter API.", err);
+        }
     }
     // Fallback: online BRouter API
     const url = `https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile || 'trekking'}&alternativeidx=${idx}&format=geojson`;
