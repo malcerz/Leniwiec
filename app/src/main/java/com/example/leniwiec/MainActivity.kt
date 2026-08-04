@@ -21,6 +21,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.leniwiec.routing.LocalRouteService
 import com.example.leniwiec.routing.RouteDataManager
@@ -76,6 +78,22 @@ class MainActivity : ComponentActivity() {
     createDocumentLauncher.launch(intent)
   }
 
+  /**
+   * Push the system bottom inset (navigation bar height) into the WebView,
+   * so the bottom panels can be raised above the on-screen navigation bar.
+   */
+  private fun pushBottomInsetToWebView(webView: WebView) {
+    val insets = ViewCompat.getRootWindowInsets(webView)
+    val bottom = insets?.getInsets(
+      WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+    )?.bottom ?: 0
+    if (bottom > 0) {
+      webView.post {
+        webView.evaluateJavascript("window.setBottomInset && window.setBottomInset($bottom);", null)
+      }
+    }
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
@@ -102,7 +120,12 @@ class MainActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
               )
-              webViewClient = WebViewClient()
+              webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                  super.onPageFinished(view, url)
+                  view?.let { pushBottomInsetToWebView(it) }
+                }
+              }
               webChromeClient = object : WebChromeClient() {
                 override fun onGeolocationPermissionsShowPrompt(
                   origin: String?,
@@ -121,6 +144,12 @@ class MainActivity : ComponentActivity() {
 
               // Register unified interface (routing + GPX sharing)
               addJavascriptInterface(WebAppInterface(this@MainActivity, this, routeService, dataManager), "AndroidInterface")
+
+              // Keep bottom panels above the system navigation bar
+              ViewCompat.setOnApplyWindowInsetsListener(this) { v, insets ->
+                pushBottomInsetToWebView(v as WebView)
+                insets
+              }
 
               // Load the main HTML page
               loadUrl("file:///android_asset/www/index.html")
@@ -141,6 +170,17 @@ class WebAppInterface(
 ) {
   companion object {
     private const val TAG = "WebAppInterface"
+  }
+
+  // ── App version (from build counter, shown next to app name) ──
+
+  @JavascriptInterface
+  fun getAppVersion(): String {
+    return try {
+      activity.assets.open("www/app-version.txt").bufferedReader().use { it.readText().trim() }
+    } catch (e: Exception) {
+      "1.0001"
+    }
   }
 
   // ── GPX Sharing (existing) ──
@@ -199,6 +239,32 @@ class WebAppInterface(
       }
       val jsResult = if (resultJson != null) {
         // Escape for JS: wrap in single quotes and escape special chars
+        resultJson
+          .replace("\\", "\\\\")
+          .replace("'", "\\'")
+          .replace("\n", "\\n")
+          .replace("\r", "\\r")
+      } else {
+        "null"
+      }
+      withContext(Dispatchers.Main) {
+        webView.evaluateJavascript("window.routeCallback($callbackId, '$jsResult');", null)
+      }
+    }
+  }
+
+  // ── Local Round-Trip (Loop) Calculation ──
+
+  @JavascriptInterface
+  fun calculateRoundTripAsync(lat: Double, lon: Double, radiusMeters: Int, startDirection: Int, points: Int, callbackId: Int) {
+    Log.d(TAG, "calculateRoundTripAsync called: lat=$lat, lon=$lon, radius=$radiusMeters, dir=$startDirection, points=$points, callbackId=$callbackId")
+    activity.lifecycleScope.launch {
+      val resultJson = routeService.calculateRoundTrip(lat, lon, radiusMeters, startDirection, points) { linksProcessed, elapsedMs ->
+        activity.runOnUiThread {
+          webView.evaluateJavascript("window.onRoutingProgress($callbackId, $linksProcessed, $elapsedMs);", null)
+        }
+      }
+      val jsResult = if (resultJson != null) {
         resultJson
           .replace("\\", "\\\\")
           .replace("'", "\\'")

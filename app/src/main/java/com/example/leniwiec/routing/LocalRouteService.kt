@@ -187,6 +187,112 @@ class LocalRouteService(private val appContext: Context) {
   }
 
   /**
+   * Calculate a round-trip (loop) route using BRouter's built-in round-trip
+   * engine mode. BRouter generates the loop waypoints on a circle around the
+   * start point and soft-snaps them within waypointCatchingRange, so it can
+   * follow flat local infrastructure instead of forcing fixed waypoints.
+   *
+   * @param lat/lon Start point of the loop.
+   * @param radiusMeters BRouter round-trip RADIUS (loop length is roughly 5x this).
+   * @param startDirection Start bearing in degrees (0-359), or -1 for terrain-aware auto.
+   * @param points Number of loop waypoints placed on the circle (3-9).
+   * @return GeoJSON string, or null on failure.
+   */
+  suspend fun calculateRoundTrip(
+    lat: Double,
+    lon: Double,
+    radiusMeters: Int,
+    startDirection: Int = -1,
+    points: Int = 5,
+    profile: String = "trekking",
+    onProgress: ((linksProcessed: Int, elapsedMs: Long) -> Unit)? = null
+  ): String? = withContext(Dispatchers.Default) {
+    try {
+      initialize()
+
+      val segmentsDir = File(appContext.filesDir, "$SEGMENTS_DIR")
+      val profilesDir = File(appContext.filesDir, "$PROFILES_DIR")
+      val profileFile = File(profilesDir, "$profile.brf")
+
+      if (!profileFile.exists()) {
+        Log.e(TAG, "Profile not found: ${profileFile.absolutePath}")
+        return@withContext null
+      }
+
+      if (!hasAnyData()) {
+        Log.e(TAG, "No routing data (.rd5) available. Download segments first.")
+        return@withContext null
+      }
+
+      // Configure round-trip routing context (doRoundTrip -> buildPointsFromCircle)
+      val rc = RoutingContext()
+      rc.localFunction = profile
+      rc.roundTripDistance = radiusMeters.coerceIn(300, 100_000)
+      rc.roundTripPoints = points.coerceIn(3, 9)
+      rc.startDirection = if (startDirection in 0..359) startDirection else null
+
+      // Single start waypoint; BRouter adds the loop points itself
+      val startPoint = OsmNodeNamed().apply {
+        name = "from"
+        ilon = ((lon + 180.0) * 1_000_000 + 0.5).toInt()
+        ilat = ((lat + 90.0) * 1_000_000 + 0.5).toInt()
+        wpttype = 0
+      }
+
+      val engine = RoutingEngine(
+        null,
+        null,
+        segmentsDir,
+        mutableListOf(startPoint),
+        rc,
+        RoutingEngine.BROUTER_ENGINEMODE_ROUNDTRIP
+      )
+      engine.quite = true
+
+      // Start progress polling coroutine (same as calculateRoute)
+      val startTime = System.currentTimeMillis()
+      val progressJob = onProgress?.let { progressCallback ->
+        launch(Dispatchers.Default) {
+          while (!engine.isFinished) {
+            val elapsed = System.currentTimeMillis() - startTime
+            progressCallback(engine.linksProcessed, elapsed)
+            delay(200)
+          }
+        }
+      }
+
+      try {
+        engine.doRun(ROUTE_TIMEOUT_MS)
+      } finally {
+        progressJob?.cancel()
+        onProgress?.invoke(engine.linksProcessed, System.currentTimeMillis() - startTime)
+      }
+
+      // Check for errors
+      val errorMsg = engine.errorMessage
+      if (errorMsg != null) {
+        Log.w(TAG, "Round-trip routing error: $errorMsg")
+        return@withContext null
+      }
+
+      // Get result and format as GeoJSON
+      val track = engine.foundTrack
+      if (track == null || track.nodes.size < 2) {
+        Log.w(TAG, "No round-trip track found")
+        return@withContext null
+      }
+
+      val formatter = FormatJson(rc)
+      val geojson = formatter.format(track)
+      Log.d(TAG, "Round trip calculated: ${track.distance}m, ascend=${track.ascend}")
+      geojson
+    } catch (e: Exception) {
+      Log.e(TAG, "Round trip calculation failed", e)
+      null
+    }
+  }
+
+  /**
    * Parse BRouter lonlats format into list of OsmNodeNamed.
    * Format: "lon1,lat1|lon2,lat2|lon3,lat3|..."
    */

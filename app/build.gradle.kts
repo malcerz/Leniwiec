@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -96,4 +98,48 @@ dependencies {
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+}
+
+// ── Auto-incrementing build version (shown in the app UI next to "Leniwiec") ──
+// Every build bumps app/version.properties by 1 and writes the version string
+// into a generated asset (www/app-version.txt) that the WebView reads at runtime.
+// Starts at "1.0001" (buildNumber 0 -> 1 on the first build).
+abstract class BumpVersionTask : DefaultTask() {
+
+  @get:OutputDirectory
+  abstract val outDir: DirectoryProperty
+
+  @get:Internal
+  abstract val versionFile: RegularFileProperty
+
+  @TaskAction
+  fun run() {
+    val propsFile = versionFile.get().asFile
+    val props = Properties()
+    if (propsFile.exists()) {
+      propsFile.inputStream().use { props.load(it) }
+    }
+    val buildNumber = (props.getProperty("buildNumber")?.toIntOrNull() ?: 0) + 1
+    props.setProperty("buildNumber", buildNumber.toString())
+    propsFile.outputStream().use { props.store(it, "Auto-incremented build counter. Bumped on every build.") }
+
+    val version = "1." + String.format("%04d", buildNumber)
+    val target = outDir.get().dir("www").file("app-version.txt").asFile
+    target.parentFile.mkdirs()
+    target.writeText(version)
+    logger.lifecycle("Leniwiec build version: $version")
+  }
+}
+
+val bumpVersion = tasks.register<BumpVersionTask>("bumpVersion") {
+  versionFile.set(layout.projectDirectory.file("version.properties"))
+  // Always run so the counter increments on every build (never up-to-date)
+  outputs.upToDateWhen { false }
+}
+
+// Expose the generated version file as an Android asset (www/app-version.txt)
+androidComponents {
+  onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(bumpVersion) { it.outDir }
+  }
 }

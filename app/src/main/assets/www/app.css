@@ -75,6 +75,7 @@ body, html {
     flex-direction: column;
     justify-content: space-between;
     padding: 16px;
+    padding-bottom: calc(16px + var(--bottom-inset, env(safe-area-inset-bottom, 0px)));
 }
 
 /* Glassmorphic Panels */
@@ -587,6 +588,7 @@ body, html {
 @media (max-width: 480px) {
     .app-container {
         padding: 10px;
+        padding-bottom: calc(10px + var(--bottom-inset, env(safe-area-inset-bottom, 0px)));
     }
     
     .search-panel {

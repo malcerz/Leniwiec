@@ -39,12 +39,12 @@ public class RoutingEngine extends Thread {
 
   private NodesCache nodesCache;
   private SortedHeap<OsmPath> openSet = new SortedHeap<>();
-  private boolean finished = false;
+  private volatile boolean finished = false;
 
   protected List<OsmNodeNamed> waypoints = null;
   List<OsmNodeNamed> extraWaypoints = null;
   protected List<MatchedWaypoint> matchedWaypoints;
-  private int linksProcessed = 0;
+  private volatile int linksProcessed = 0;
 
   private int nodeLimit; // used for target island search
   private int MAXNODES_ISLAND_CHECK = 500;

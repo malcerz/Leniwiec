@@ -9,13 +9,18 @@ let elevationChart = null;
 let hoverMarker = null;
 let currentMode = 'ab'; // 'ab' or 'loop'
 // Store per‑route speed (k‑links/s)
-const routeSpeeds = {};
+let routeSpeeds = {};
 
 
 // Local routing async callback mechanism
 let routingCallbackId = 0;
 const routingCallbacks = {};
 const activeRoutingProgress = {};
+
+// Bottom inset (px) set by Android so bottom panels stay above the navigation bar
+window.setBottomInset = function(px) {
+    document.documentElement.style.setProperty('--bottom-inset', (px || 0) + 'px');
+};
 
 // Called by Android native code when local route calculation completes
 window.routeCallback = function(callbackId, geojsonStr) {
@@ -75,6 +80,21 @@ function updateLoaderProgressText() {
     }
 }
 
+// Append the average routing speed (k-l/s) to the app name/version line,
+// e.g. "Leniwiec 1.0007 (300k-l/s)"
+function updateLogoWithSpeed() {
+    const logoText = document.querySelector('.logo-text');
+    if (!logoText) return;
+    const base = logoText.textContent.split('(')[0].trim();
+    const speeds = Object.values(routeSpeeds);
+    if (speeds.length > 0) {
+        const avg = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+        logoText.textContent = `${base} (${Math.round(avg)}k-l/s)`;
+    } else {
+        logoText.textContent = base;
+    }
+}
+
 // Called by Android when download progress updates
 window.onDownloadProgress = function(regionId, progress) {
     const el = document.getElementById('download-progress-bar');
@@ -107,6 +127,15 @@ const routeColors = {
 document.addEventListener('DOMContentLoaded', () => {
     // Initialize Lucide icons
     lucide.createIcons();
+
+    // Show build version next to app name (e.g. "Leniwiec 1.0001")
+    try {
+        const version = (window.AndroidInterface && window.AndroidInterface.getAppVersion)
+            ? window.AndroidInterface.getAppVersion()
+            : '1.0001';
+        const logoText = document.querySelector('.logo-text');
+        if (logoText) logoText.textContent = `Leniwiec ${version}`;
+    } catch (e) { /* keep default app name */ }
     
     // Initialize Map
     initMap();
@@ -148,6 +177,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (endMarker) {
             endMarker.addTo(map);
         }
+        // Hide the results panel so it doesn't cover the map when switching modes
+        const resultsPanel = document.getElementById('results-panel');
+        if (resultsPanel) resultsPanel.classList.add('hidden');
         updateRouteCountLabel();
     });
     
@@ -160,6 +192,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (endMarker) {
             map.removeLayer(endMarker);
         }
+        // Hide the results panel so it doesn't cover the map when switching modes
+        const resultsPanel = document.getElementById('results-panel');
+        if (resultsPanel) resultsPanel.classList.add('hidden');
         updateRouteCountLabel();
     });
     
@@ -382,7 +417,7 @@ function reverseGeocode(type, lat, lon) {
 }
 
 // ── Local route fetching via Android native interface (async callback pattern) ──
-async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
+async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '', timeoutMs = 15000) {
     // After a route finishes, check if all are done and show average speed
     if (Object.keys(activeRoutingProgress).length === 0) {
         // All routes finished – compute average speed
@@ -411,14 +446,14 @@ async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
                 routingCallbacks[callbackId] = { resolve, reject };
                 activeRoutingProgress[callbackId] = { linksProcessed: 0, elapsedMs: 0 };
                 window.AndroidInterface.calculateRouteAsync(lonlats, profile || 'trekking', idx, nogoLonLats, callbackId);
-                // Timeout after 15 seconds
+                // Timeout per route (default 15s, scaled up for longer loops)
                 setTimeout(() => {
                     if (routingCallbacks[callbackId]) {
                         delete routingCallbacks[callbackId];
                         delete activeRoutingProgress[callbackId];
                         reject(new Error("Local routing timeout"));
                     }
-                }, 15000);
+                }, timeoutMs);
             });
         } catch (err) {
             console.warn("Local routing failed/timeout. Falling back to online BRouter API.", err);
@@ -431,26 +466,74 @@ async function fetchRouteLocal(lonlats, profile, idx, nogoLonLats = '') {
     return res.json();
 }
 
+// Local round-trip (loop) via BRouter's round-trip engine mode
+async function fetchRoundTripLocal(startLat, startLng, radiusMeters, startDirection, points = 5, timeoutMs = 30000) {
+    if (window.AndroidInterface && window.AndroidInterface.calculateRoundTripAsync && window.AndroidInterface.isLocalRoutingAvailable()) {
+        try {
+            return await new Promise((resolve, reject) => {
+                const callbackId = ++routingCallbackId;
+                routingCallbacks[callbackId] = { resolve, reject };
+                activeRoutingProgress[callbackId] = { linksProcessed: 0, elapsedMs: 0 };
+                window.AndroidInterface.calculateRoundTripAsync(startLat, startLng, radiusMeters, startDirection, points, callbackId);
+                // Round-trip includes terrain analysis; timeout scales with route length
+                setTimeout(() => {
+                    if (routingCallbacks[callbackId]) {
+                        delete routingCallbacks[callbackId];
+                        delete activeRoutingProgress[callbackId];
+                        reject(new Error("Round-trip routing timeout"));
+                    }
+                }, timeoutMs);
+            });
+        } catch (err) {
+            console.warn("Round-trip routing failed/timeout.", err);
+        }
+    }
+    return null;
+}
+
 // ── Loop via 4 waypoints (Simple Single Request) ──
 // Forces a loop using 5 waypoints (Start → P1 → Cel → P2 → Start) on a square.
 // Calculates everything in one fast BRouter call.
-async function calculateLoopRoute(start, angleDeg, distanceVal) {
-    const points = RouteGeo.calculateViaPoints(
-        start.lat, start.lng,
-        angleDeg,
-        distanceVal * 1000,
-        0.20
-    );
+// BRouter round-trip distance is the loop RADIUS; the resulting loop length is
+// roughly 5x the radius. Tunable to match the requested total loop distance.
+const ROUND_TRIP_RADIUS_FACTOR = 5;
 
-    const lonlats = [
-        `${start.lng},${start.lat}`,
-        `${points.p1.lng.toFixed(6)},${points.p1.lat.toFixed(6)}`,
-        `${points.cel.lng.toFixed(6)},${points.cel.lat.toFixed(6)}`,
-        `${points.p2.lng.toFixed(6)},${points.p2.lat.toFixed(6)}`,
-        `${start.lng},${start.lat}`
-    ].join('|');
+// Time budget for loop routing, scaled by the requested route length:
+// 30s per 10km of loop (min 20s) for a single variant; the whole series gets
+// perRoute * routeCount + 10s, capped at 6 minutes, so the UI always finishes.
+function loopTimeoutForDistance(distanceKm) {
+    const perRouteSec = Math.max(20, Math.ceil(distanceKm / 10) * 30);
+    return perRouteSec * 1000;
+}
+const LOOP_SERIES_MAX_MS = 360000;
 
-    const result = await fetchRouteLocal(lonlats, 'trekking', 0);
+async function calculateLoopRoute(start, angleDeg, distanceVal, timeoutMs = undefined) {
+    const distanceMeters = distanceVal * 1000;
+    const radiusMeters = Math.max(500, Math.round(distanceMeters / ROUND_TRIP_RADIUS_FACTOR));
+
+    // BRouter generates soft waypoints on a circle around start and snaps them
+    // within waypointCatchingRange, following flat infrastructure nearby.
+    let result = await fetchRoundTripLocal(start.lat, start.lng, radiusMeters, angleDeg, 5, timeoutMs);
+
+    // Fallback to the legacy fixed-via loop if round-trip fails.
+    if (!result || !result.features || result.features.length === 0) {
+        const points = RouteGeo.calculateViaPoints(
+            start.lat, start.lng,
+            angleDeg,
+            distanceMeters,
+            0.20
+        );
+
+        const lonlats = [
+            `${start.lng},${start.lat}`,
+            `${points.p1.lng.toFixed(6)},${points.p1.lat.toFixed(6)}`,
+            `${points.cel.lng.toFixed(6)},${points.cel.lat.toFixed(6)}`,
+            `${points.p2.lng.toFixed(6)},${points.p2.lat.toFixed(6)}`,
+            `${start.lng},${start.lat}`
+        ].join('|');
+
+        result = await fetchRouteLocal(lonlats, 'trekking', 0, '', timeoutMs);
+    }
 
     if (!result || !result.features || result.features.length === 0) {
         throw new Error('Nie udało się wyznaczyć trasy pętli');
@@ -463,6 +546,99 @@ async function calculateLoopRoute(start, angleDeg, distanceVal) {
     );
 
     return result;
+}
+
+// ── Faza 2: scoring of generated route candidates (lower = better) ──
+// Score = w1*DistanceDiff + w2*TotalAscent + w3*OverlapPenalty (all in meters)
+const SCORE_WEIGHTS = { distance: 1, ascent: 2, overlap: 1 };
+
+function computeRouteScore(route, targetDistanceMeters) {
+    const distanceDiff = targetDistanceMeters > 0
+        ? Math.abs(route.distanceMeters - targetDistanceMeters)
+        : 0;
+    const totalAscent = route.elevationGain || 0;
+    const overlap = route.overlapMeters || 0;
+    return SCORE_WEIGHTS.distance * distanceDiff
+         + SCORE_WEIGHTS.ascent * totalAscent
+         + SCORE_WEIGHTS.overlap * overlap;
+}
+
+// ── Route metrics (distance / elevation / overlap) computed from GeoJSON ──
+function computeRouteMetrics(geojson) {
+    const feature = geojson.features[0];
+    const coordinates = feature.geometry.coordinates; // [[lon, lat, elev], ...]
+
+    // Calculate distance from coordinates (ignores track-length property,
+    // which may be stale after calculateLoopRoute trims backtracking branches)
+    let distanceMeters = 0;
+    for (let i = 0; i < coordinates.length - 1; i++) {
+        const p1 = L.latLng(coordinates[i][1], coordinates[i][0]);
+        const p2 = L.latLng(coordinates[i + 1][1], coordinates[i + 1][0]);
+        distanceMeters += p1.distanceTo(p2);
+    }
+
+    // Calculate elevation gain/loss
+    let elevationGain = 0;
+    let elevationLoss = 0;
+    const elevations = [];
+    const distances = [];
+    let currentDist = 0;
+
+    for (let i = 0; i < coordinates.length; i++) {
+        const elev = coordinates[i][2] || 0;
+        elevations.push(elev);
+
+        if (i > 0) {
+            const p1 = L.latLng(coordinates[i - 1][1], coordinates[i - 1][0]);
+            const p2 = L.latLng(coordinates[i][1], coordinates[i][0]);
+            const dist = p1.distanceTo(p2);
+            currentDist += dist;
+
+            const diff = elev - coordinates[i - 1][2];
+            if (diff > 0) {
+                elevationGain += diff;
+            } else {
+                elevationLoss += Math.abs(diff);
+            }
+        }
+        distances.push(currentDist / 1000); // km
+    }
+
+    const overlap = RouteGeo.findRouteOverlap(coordinates);
+
+    return {
+        coordinates,
+        distanceMeters: Math.round(distanceMeters),
+        distanceKm: (distanceMeters / 1000).toFixed(1),
+        elevationGain: Math.round(elevationGain),
+        elevationLoss: Math.round(elevationLoss),
+        overlapMeters: overlap.overlapMeters || 0,
+        overlapRatio: overlap.overlapRatio || 0,
+        timeMinutes: Math.round((distanceMeters / 1000) / 15 * 60), // Assumes 15km/h average bike speed
+        elevations,
+        distances
+    };
+}
+
+// ── Route acceptance criteria ──
+// Candidates that fail these are rejected and the search is repeated until the
+// requested number of variants is reached (or the search budget runs out).
+const ROUTE_CRITERIA = {
+    ascentPerKm: 15,        // max ~15 m of elevation gain per route km
+    overlapRatio: 0.10,     // max 10% of route length overlapping itself
+    distanceTolerance: 0.40 // loop: target distance ±40%
+};
+const MAX_ALTERNATIVES = 10; // max BRouter alternative index to try for A→B mode
+
+function routeMeetsCriteria(metrics, targetDistanceMeters) {
+    const km = metrics.distanceMeters / 1000;
+    if (metrics.elevationGain > ROUTE_CRITERIA.ascentPerKm * km) return false;
+    if (metrics.overlapRatio > ROUTE_CRITERIA.overlapRatio) return false;
+    if (targetDistanceMeters > 0) {
+        const diff = Math.abs(metrics.distanceMeters - targetDistanceMeters);
+        if (diff > ROUTE_CRITERIA.distanceTolerance * targetDistanceMeters) return false;
+    }
+    return true;
 }
 
 async function calculateRoutes() {
@@ -484,8 +660,11 @@ async function calculateRoutes() {
     mapRoutes.forEach(r => map.removeLayer(r));
     mapRoutes = [];
     routesData = [];
+    routeSpeeds = {}; // reset speeds before a new calculation
 
     let results = [];
+    let rejectedPool = [];
+    let targetDistanceMeters = 0;
     const routeCount = parseInt(document.getElementById('route-count-input').value) || 3;
 
     try {
@@ -495,31 +674,58 @@ async function calculateRoutes() {
             const lonlats = `${start.lng},${start.lat}|${end.lng},${end.lat}`;
 
             let completed = 0;
-            const indices = Array.from({ length: routeCount }, (_, i) => i);
-            const fetchPromises = indices.map(idx => {
-                return fetchRouteLocal(lonlats, 'trekking', idx)
-                    .then(geojson => {
-                        completed++;
-                        showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                        return { index: idx, geojson: geojson };
-                    })
-                    .catch(err => {
-                        completed++;
-                        showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                        console.warn(`Alternative ${idx} failed or not available`, err);
-                        return null;
-                    });
-            });
-            results = await Promise.all(fetchPromises);
+            let alternativeIdx = 0;
+            const allResults = [];
+            // Keep requesting further BRouter alternatives until we have the
+            // requested number of variants that pass the criteria (or run out).
+            while (allResults.length < routeCount && alternativeIdx < MAX_ALTERNATIVES) {
+                const needed = routeCount - allResults.length;
+                const indices = [];
+                while (indices.length < needed && alternativeIdx < MAX_ALTERNATIVES) {
+                    indices.push(alternativeIdx);
+                    alternativeIdx++;
+                }
+                const batch = await Promise.all(indices.map(idx => {
+                    return fetchRouteLocal(lonlats, 'trekking', idx)
+                        .then(geojson => {
+                            completed++;
+                            showLoader(`Obliczanie wariantu ${Math.min(completed, routeCount)} z ${routeCount}...`);
+                            return { index: idx, geojson: geojson };
+                        })
+                        .catch(err => {
+                            completed++;
+                            showLoader(`Obliczanie wariantu ${Math.min(completed, routeCount)} z ${routeCount}...`);
+                            console.warn(`Alternative ${idx} failed or not available`, err);
+                            return null;
+                        });
+                }));
+                for (const r of batch) {
+                    if (r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0) {
+                        const metrics = computeRouteMetrics(r.geojson);
+                        if (routeMeetsCriteria(metrics, 0)) {
+                            allResults.push({ index: allResults.length, geojson: r.geojson, metrics });
+                        } else {
+                            rejectedPool.push({ geojson: r.geojson, metrics });
+                            console.warn(`Alternative ${r.index} rejected (criteria not met)`, metrics);
+                        }
+                    }
+                }
+            }
+            results = allResults;
         } else {
             const start = startMarker.getLatLng();
             const distanceVal = parseFloat(document.getElementById('loop-distance-input').value) || 10;
+            targetDistanceMeters = distanceVal * 1000;
 
             const triedAngles = new Set();
             let angleOffset = 0;
             let completed = 0;
+            const perRouteTimeoutMs = loopTimeoutForDistance(distanceVal);
+            const seriesTimeoutMs = Math.min(perRouteTimeoutMs * routeCount + 10000, LOOP_SERIES_MAX_MS);
+            const loopDeadline = Date.now() + seriesTimeoutMs;
+            let seriesActive = true;
 
-            while (results.length < routeCount && triedAngles.size < 36) {
+            while (results.length < routeCount && triedAngles.size < 36 && Date.now() < loopDeadline) {
                 const needed = routeCount - results.length;
                 const step = 360 / routeCount;
                 const newAngles = [];
@@ -542,27 +748,57 @@ async function calculateRoutes() {
                 showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
 
                 const batchPromises = anglesToTry.map((angle) => {
-                    return calculateLoopRoute(start, angle, distanceVal)
+                    return calculateLoopRoute(start, angle, distanceVal, perRouteTimeoutMs)
                         .then(geojson => {
+                            if (!seriesActive) return null;
                             completed++;
-                            showLoader(`Obliczanie wariantu ${completed} z ${routeCount}...`);
-                            return { geojson };
+                            showLoader(`Obliczanie wariantu ${Math.min(completed, routeCount)} z ${routeCount}...`);
+                            return { geojson, angle };
                         })
                         .catch(err => {
+                            if (!seriesActive) return null;
+                            completed++;
+                            showLoader(`Obliczanie wariantu ${Math.min(completed, routeCount)} z ${routeCount}...`);
                             console.warn(`Loop candidate at angle ${angle} failed`, err);
                             return null;
                         });
                 });
 
-                const batchResults = await Promise.all(batchPromises);
+                // Hard cap: never let a batch exceed the remaining series budget.
+                const remainingMs = Math.max(0, loopDeadline - Date.now());
+                const batchResults = await Promise.race([
+                    Promise.all(batchPromises),
+                    new Promise(resolve => setTimeout(() => resolve(null), remainingMs))
+                ]);
+
+                if (batchResults === null) {
+                    // Series time budget exhausted — stop and keep what we have.
+                    seriesActive = false;
+                    break;
+                }
                 
                 for (const r of batchResults) {
                     if (r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0) {
-                        results.push({
-                            index: results.length,
-                            geojson: r.geojson
-                        });
+                        const metrics = computeRouteMetrics(r.geojson);
+                        // Reject candidates that fail the criteria and keep searching
+                        // until the requested number of variants is reached.
+                        if (routeMeetsCriteria(metrics, targetDistanceMeters)) {
+                            results.push({
+                                index: results.length,
+                                angle: r.angle,
+                                geojson: r.geojson,
+                                metrics
+                            });
+                        } else {
+                            rejectedPool.push({ angle: r.angle, geojson: r.geojson, metrics });
+                            console.warn("Loop candidate rejected (criteria not met)", metrics);
+                        }
                     }
+                }
+
+                if (Date.now() >= loopDeadline) {
+                    seriesActive = false;
+                    break;
                 }
 
                 if (results.length < routeCount) {
@@ -571,7 +807,17 @@ async function calculateRoutes() {
             }
         }
 
+        // If every candidate was rejected by the criteria, fall back to the
+        // closest candidates so the user still gets usable results (e.g. in
+        // hilly terrain where nothing is flat enough).
+        if (results.length === 0 && rejectedPool.length > 0) {
+            rejectedPool.forEach(r => { r.score = computeRouteScore(r.metrics, targetDistanceMeters); });
+            rejectedPool.sort((a, b) => a.score - b.score);
+            results = rejectedPool.slice(0, routeCount).map((r, i) => ({ ...r, index: i }));
+        }
+
         hideLoader();
+        updateLogoWithSpeed();
 
         // Filter out failed routes
         const validResults = results.filter(r => r !== null && r.geojson && r.geojson.features && r.geojson.features.length > 0);
@@ -581,61 +827,26 @@ async function calculateRoutes() {
                 return;
             }
 
-            // Process route metrics
+            // Process route metrics (reuse metrics already computed for the criteria checks)
             routesData = validResults.map(res => {
-            const feature = res.geojson.features[0];
-            const coordinates = feature.geometry.coordinates; // [[lon, lat, elev], ...]
+                const m = res.metrics || computeRouteMetrics(res.geojson);
+                return {
+                    index: res.index,
+                    coordinates: m.coordinates,
+                    distanceMeters: m.distanceMeters,
+                    distanceKm: m.distanceKm,
+                    elevationGain: m.elevationGain,
+                    elevationLoss: m.elevationLoss,
+                    overlapMeters: m.overlapMeters,
+                    timeMinutes: m.timeMinutes,
+                    elevations: m.elevations,
+                    distances: m.distances
+                };
+            });
 
-            // Calculate distance from coordinates (ignores track-length property,
-            // which may be stale after calculateLoopRoute trims backtracking branches)
-            let distanceMeters = 0;
-            for (let i = 0; i < coordinates.length - 1; i++) {
-                const p1 = L.latLng(coordinates[i][1], coordinates[i][0]);
-                const p2 = L.latLng(coordinates[i+1][1], coordinates[i+1][0]);
-                distanceMeters += p1.distanceTo(p2);
-            }
-
-            // Calculate elevation gain/loss
-            let elevationGain = 0;
-            let elevationLoss = 0;
-            const elevations = [];
-            const distances = [];
-            let currentDist = 0;
-
-            for (let i = 0; i < coordinates.length; i++) {
-                const elev = coordinates[i][2] || 0;
-                elevations.push(elev);
-                
-                if (i > 0) {
-                    const p1 = L.latLng(coordinates[i-1][1], coordinates[i-1][0]);
-                    const p2 = L.latLng(coordinates[i][1], coordinates[i][0]);
-                    const dist = p1.distanceTo(p2);
-                    currentDist += dist;
-                    
-                    const diff = elev - coordinates[i-1][2];
-                    if (diff > 0) {
-                        elevationGain += diff;
-                    } else {
-                        elevationLoss += Math.abs(diff);
-                    }
-                }
-                distances.push(currentDist / 1000); // km
-            }
-
-            return {
-                index: res.index,
-                coordinates: coordinates,
-                distanceKm: (distanceMeters / 1000).toFixed(1),
-                elevationGain: Math.round(elevationGain),
-                elevationLoss: Math.round(elevationLoss),
-                timeMinutes: Math.round((distanceMeters / 1000) / 15 * 60), // Assumes 15km/h average bike speed
-                elevations: elevations,
-                distances: distances
-            };
-        });
-
-        // Sort by elevation gain (ascending) — najmniejsza liczba podjazdów pierwsza
-        routesData.sort((a, b) => a.elevationGain - b.elevationGain);
+        // Faza 2: score candidates (distance diff + ascent + overlap) and sort ascending
+        routesData.forEach(r => { r.score = computeRouteScore(r, targetDistanceMeters); });
+        routesData.sort((a, b) => a.score - b.score);
 
         // Identify the one with minimum elevation gain
         let flatestIdx = 0;
@@ -646,6 +857,16 @@ async function calculateRoutes() {
                 flatestIdx = idx;
             }
         });
+
+        // The flattest route is the app's primary result — always list it FIRST,
+        // no matter where the combined score would place it. The remaining
+        // candidates keep their score-based order.
+        if (flatestIdx > 0) {
+            const [flattest] = routesData.splice(flatestIdx, 1);
+            routesData.unshift(flattest);
+            flatestIdx = 0;
+        }
+
         routesData.forEach((route, idx) => {
             route.isFlatest = (idx === flatestIdx);
         });
@@ -708,7 +929,7 @@ function displayRoutes() {
             const compassLabels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "NNE", "ENE", "ESE", "SSE", "SSW", "WSW", "WNW", "NNW"];
             const routeCount = parseInt(document.getElementById('route-count-input').value) || 8;
             const step = 360 / routeCount;
-            const angle = route.index * step;
+            const angle = route.angle ?? (route.index * step);
             // Find closest compass label
             const labelIdx = Math.round(angle / 22.5) % 16;
             const label = compassLabels[labelIdx] || `${Math.round(angle)}°`;
@@ -913,7 +1134,10 @@ function updateElevationChart(route, color) {
 // Utility Helpers
 function showLoader(text) {
     const loader = document.getElementById('loader');
-    loader.querySelector('.loader-text').textContent = text;
+    const textEl = loader.querySelector('.loader-text');
+    // Preserve the already-appended speed suffix ("(x.x k-links/s)") if present
+    const speedPart = (textEl.textContent.match(/\(\d+(\.\d+)? k-links\/s\)/) || [''])[0];
+    textEl.textContent = speedPart ? `${text} ${speedPart}` : text;
     loader.classList.remove('hidden');
 }
 
