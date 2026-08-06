@@ -31,6 +31,8 @@ Każdy wygenerowany kandydat jest oceniany i może zostać odrzucony, jeśli nie
 - nakładanie się trasy na siebie ≤ 10 % długości,
 - dla pętli: długość w zakresie ±40 % od zadanej.
 
+Progi te można dostosować w aplikacji: ikona suwaków w nagłówku → „Ustawienia tras”. Zmiany są zapisywane na urządzeniu i używane przy kolejnych obliczeniach.
+
 Odrzucone trasy nie wliczają się do wyniku — poszukiwanie jest powtarzane, aż zostanie zebrana zadana liczba wariantów. Jeśli w bardzo pagórkowatym terenie żadna trasa nie spełni kryteriów, pokazywane są najlepsze z odrzuconych.
 
 Pozostałe kandydatury są sortowane według punktacji:
@@ -128,11 +130,8 @@ Aplikacja jest w aktywnej fazie rozwoju i działa w pełni lokalnie (offline) dz
 
 ## Dalsze usprawnienia
 
-- Zmiana nazwy pakietu `com.example.leniwiec` na docelową.
 - Dodanie zrzutów ekranu edytora/eksportu tras.
-- Udokumentowanie dokładnego przepływu pracy z GPX: tworzenie, edycja, podgląd i eksport tras.
 - Dodanie instrukcji wydania dla generowania podpisanych buildów APK.
-- Konfigurowalne progi kryteriów tras w interfejsie (obecnie stałe w `app.js` — `ROUTE_CRITERIA`).
 
 Jeżeli podoba ci się ta aplikacja to kup mi kawę
 - https://buycoffee.to/malcerz

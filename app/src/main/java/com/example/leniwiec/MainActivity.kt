@@ -3,12 +3,14 @@ package com.example.leniwiec
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -124,6 +126,20 @@ class MainActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                   super.onPageFinished(view, url)
                   view?.let { pushBottomInsetToWebView(it) }
+                }
+
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                  // Open external http(s) links in the system browser
+                  val url = request?.url?.toString() ?: return false
+                  if (url.startsWith("http://") || url.startsWith("https://")) {
+                    try {
+                      startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                      return true
+                    } catch (e: Exception) {
+                      Log.e("Leniwiec", "Nie udało się otworzyć linku: $url", e)
+                    }
+                  }
+                  return false
                 }
               }
               webChromeClient = object : WebChromeClient() {

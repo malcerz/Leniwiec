@@ -32,7 +32,10 @@
             <div class="logo">
                 <i data-lucide="navigation" class="logo-icon"></i>
                 <span class="logo-text">Leniwiec</span>
-                <button id="data-manage-btn" class="icon-btn" title="Zarządzaj danymi routingu" style="margin-left: auto;">
+                <button id="settings-btn" class="icon-btn" title="Ustawienia tras" style="margin-left: auto;">
+                    <i data-lucide="sliders-horizontal" style="width:16px; height:16px;"></i>
+                </button>
+                <button id="data-manage-btn" class="icon-btn" title="Zarządzaj danymi routingu" style="margin-left: 8px;">
                     <i data-lucide="hard-drive" style="width:16px; height:16px;"></i>
                 </button>
             </div>
@@ -141,6 +144,57 @@
             </div>
             <div class="modal-footer">
                 <button id="delete-all-data-btn" class="danger-btn hidden"><i data-lucide="trash-2" style="width:14px; height:14px; display:inline-block; margin-right:4px;"></i>Usuń wszystkie dane</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Route Criteria Settings Modal -->
+    <div id="settings-modal" class="modal-overlay hidden">
+        <div class="modal-panel glass-panel">
+            <div class="modal-header">
+                <h3><i data-lucide="sliders-horizontal" style="width:18px; height:18px; display:inline-block; margin-right:8px;"></i>Ustawienia tras</h3>
+                <button id="settings-modal-close" class="icon-btn"><i data-lucide="x" style="width:18px; height:18px;"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-info">Dostosuj progi kryteriów akceptacji tras. Trasy, które ich nie spełniają, są odrzucane, a wyszukiwanie jest powtarzane.</p>
+                <div class="settings-row">
+                    <div class="settings-row-label">
+                        <span>Maks. przewyższenie</span>
+                        <span class="settings-unit">m/km</span>
+                    </div>
+                    <div class="settings-row-controls">
+                        <input type="range" id="crit-ascent-range" class="settings-slider" min="0" max="100" step="1" value="15">
+                        <input type="number" id="crit-ascent" class="settings-value" min="0" max="100" step="1" value="15">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-label">
+                        <span>Nakładanie się trasy na siebie</span>
+                        <span class="settings-unit">%</span>
+                    </div>
+                    <div class="settings-row-controls">
+                        <input type="range" id="crit-overlap-range" class="settings-slider" min="0" max="50" step="1" value="10">
+                        <input type="number" id="crit-overlap" class="settings-value" min="0" max="50" step="1" value="10">
+                    </div>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-label">
+                        <span>Tolerancja długości pętli</span>
+                        <span class="settings-unit">%</span>
+                    </div>
+                    <div class="settings-row-controls">
+                        <input type="range" id="crit-tolerance-range" class="settings-slider" min="0" max="100" step="5" value="40">
+                        <input type="number" id="crit-tolerance" class="settings-value" min="0" max="100" step="5" value="40">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="settings-reset-btn" class="settings-reset-btn"><i data-lucide="rotate-ccw" style="width:14px; height:14px; display:inline-block; margin-right:4px;"></i>Przywróć domyślne</button>
+            </div>
+            <div class="settings-coffee">
+                <a href="https://buycoffee.to/malcerz" rel="noopener">
+                    <i data-lucide="coffee" style="width:14px; height:14px; display:inline-block; margin-right:4px;"></i>Postaw kawę
+                </a>
             </div>
         </div>
     </div>

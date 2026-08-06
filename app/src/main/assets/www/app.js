@@ -623,10 +623,17 @@ function computeRouteMetrics(geojson) {
 // ── Route acceptance criteria ──
 // Candidates that fail these are rejected and the search is repeated until the
 // requested number of variants is reached (or the search budget runs out).
-const ROUTE_CRITERIA = {
+const DEFAULT_ROUTE_CRITERIA = {
     ascentPerKm: 15,        // max ~15 m of elevation gain per route km
     overlapRatio: 0.10,     // max 10% of route length overlapping itself
     distanceTolerance: 0.40 // loop: target distance ±40%
+};
+
+// Runtime criteria — values may be overridden from the settings modal (localStorage).
+const ROUTE_CRITERIA = {
+    ascentPerKm: DEFAULT_ROUTE_CRITERIA.ascentPerKm,
+    overlapRatio: DEFAULT_ROUTE_CRITERIA.overlapRatio,
+    distanceTolerance: DEFAULT_ROUTE_CRITERIA.distanceTolerance
 };
 const MAX_ALTERNATIVES = 10; // max BRouter alternative index to try for A→B mode
 
@@ -1330,5 +1337,126 @@ document.addEventListener('DOMContentLoaded', () => {
             deleteAllBtn.classList.add('hidden');
             progressContainer.classList.add('hidden');
         }
+    }
+});
+
+// ── Route Criteria Settings Modal ──
+
+document.addEventListener('DOMContentLoaded', () => {
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsModal = document.getElementById('settings-modal');
+    const settingsModalClose = document.getElementById('settings-modal-close');
+    const settingsResetBtn = document.getElementById('settings-reset-btn');
+
+    const SETTINGS_STORAGE_KEY = 'leniwiec_route_criteria';
+
+    // Field descriptors: internal key -> DOM ids + display mapping.
+    // overlapRatio and distanceTolerance are stored as ratios (0..1) but
+    // shown/edited as percentages in the UI.
+    const SETTINGS_FIELDS = [
+        { key: 'ascentPerKm',       rangeId: 'crit-ascent-range',       numberId: 'crit-ascent',       min: 0, max: 100, step: 1 },
+        { key: 'overlapRatio',      rangeId: 'crit-overlap-range',      numberId: 'crit-overlap',      min: 0, max: 50,  step: 1, toDisplay: v => Math.round(v * 100), fromDisplay: v => v / 100 },
+        { key: 'distanceTolerance', rangeId: 'crit-tolerance-range',    numberId: 'crit-tolerance',    min: 0, max: 100, step: 5, toDisplay: v => Math.round(v * 100), fromDisplay: v => v / 100 }
+    ];
+
+    function loadRouteCriteriaSettings() {
+        try {
+            const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+            if (!raw) return;
+            const saved = JSON.parse(raw);
+            for (const field of SETTINGS_FIELDS) {
+                const value = Number(saved[field.key]);
+                if (Number.isFinite(value)) {
+                    ROUTE_CRITERIA[field.key] = value;
+                }
+            }
+        } catch (err) {
+            console.warn('Nie udało się wczytać ustawień tras:', err);
+        }
+    }
+
+    function saveRouteCriteriaSettings() {
+        try {
+            localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
+                ascentPerKm: ROUTE_CRITERIA.ascentPerKm,
+                overlapRatio: ROUTE_CRITERIA.overlapRatio,
+                distanceTolerance: ROUTE_CRITERIA.distanceTolerance
+            }));
+        } catch (err) {
+            console.warn('Nie udało się zapisać ustawień tras:', err);
+        }
+    }
+
+    function displayValue(field) {
+        return field.toDisplay ? field.toDisplay(ROUTE_CRITERIA[field.key]) : ROUTE_CRITERIA[field.key];
+    }
+
+    // Apply a display value to ROUTE_CRITERIA and sync both controls + persist.
+    function applyValue(field, displayVal) {
+        const raw = field.fromDisplay ? field.fromDisplay(displayVal) : displayVal;
+        ROUTE_CRITERIA[field.key] = raw;
+        const range = document.getElementById(field.rangeId);
+        const number = document.getElementById(field.numberId);
+        if (range) range.value = displayVal;
+        if (number) number.value = displayVal;
+        saveRouteCriteriaSettings();
+    }
+
+    // Load saved values and sync the controls
+    loadRouteCriteriaSettings();
+    for (const field of SETTINGS_FIELDS) {
+        applyValue(field, displayValue(field));
+    }
+
+    // Open modal
+    settingsBtn.addEventListener('click', () => {
+        settingsModal.classList.remove('hidden');
+        // Re-sync controls from ROUTE_CRITERIA in case values changed elsewhere
+        for (const field of SETTINGS_FIELDS) {
+            applyValue(field, displayValue(field));
+        }
+    });
+
+    // Close modal
+    settingsModalClose.addEventListener('click', () => {
+        settingsModal.classList.add('hidden');
+    });
+
+    // Close modal on overlay click
+    settingsModal.addEventListener('click', (e) => {
+        if (e.target === settingsModal) {
+            settingsModal.classList.add('hidden');
+        }
+    });
+
+    // Reset to defaults
+    settingsResetBtn.addEventListener('click', () => {
+        for (const field of SETTINGS_FIELDS) {
+            ROUTE_CRITERIA[field.key] = DEFAULT_ROUTE_CRITERIA[field.key];
+        }
+        for (const field of SETTINGS_FIELDS) {
+            applyValue(field, displayValue(field));
+        }
+    });
+
+    // Slider / number input listeners (two-way sync)
+    for (const field of SETTINGS_FIELDS) {
+        const range = document.getElementById(field.rangeId);
+        const number = document.getElementById(field.numberId);
+        if (!range || !number) continue;
+
+        range.addEventListener('input', () => {
+            number.value = range.value;
+            applyValue(field, parseFloat(range.value));
+        });
+
+        number.addEventListener('input', () => {
+            let val = parseFloat(number.value);
+            if (Number.isNaN(val)) return;
+            val = Math.max(field.min, Math.min(field.max, val));
+            number.value = val;
+            range.value = val;
+            applyValue(field, val);
+        });
     }
 });
