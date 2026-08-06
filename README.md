@@ -126,12 +126,9 @@ Te uprawnienia są spójne z aplikacją, która może operować na danych trasy 
 
 ## Obecny status
 
-Aplikacja jest w aktywnej fazie rozwoju i działa w pełni lokalnie (offline) dzięki wbudowanemu silnikowi BRouter (`brouter-lib`) — trasy są wyznaczane na urządzeniu, bez zewnętrznych serwerów (z wyjątkiem geokodowania oraz awaryjnego pobierania tras online). Projekt jest rozwijany na GitHubie. Kod nadal używa tymczasowego identyfikatora pakietu `com.example.leniwiec`.
+Aplikacja działa w pełni lokalnie (offline) dzięki wbudowanemu silnikowi BRouter (`brouter-lib`) — trasy są wyznaczane na urządzeniu, bez zewnętrznych serwerów (z wyjątkiem geokodowania oraz awaryjnego pobierania tras online). Projekt jest rozwijany na GitHubie.
 
-## Dalsze usprawnienia
 
-- Dodanie zrzutów ekranu edytora/eksportu tras.
-- Dodanie instrukcji wydania dla generowania podpisanych buildów APK.
 
 Jeżeli podoba ci się ta aplikacja to kup mi kawę
 - https://buycoffee.to/malcerz
